@@ -179,7 +179,7 @@ eltanin_ros/
 ├── docs/design/eltaninnavyuros.md   ← 本文書
 ├── eltanin_ros/                     メタパッケージ (ament_package のみ)
 ├── eltanin_vendor/                  eltanin のビルド・インストール (D-24)
-├── eltanin_msgs/                    msg / srv / action (interface only)
+├── eltanin_msgs/                    msg / action (interface only)
 ├── eltanin_ros_common/              変換層・時計・ウォッチドッグ・tf・パラメータ検証
 ├── eltanin_costmap/                 local_map, global_costmap の 2 ノード
 ├── eltanin_planner/                 global_path_planner, local_path_planner の 2 ノード
@@ -220,6 +220,8 @@ ExternalProject_Add(eltanin_external
   CMAKE_ARGS
     -DCMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}
     -DCMAKE_BUILD_TYPE=${ELTANIN_VENDOR_BUILD_TYPE}
+    -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+    -DCMAKE_POSITION_INDEPENDENT_CODE=ON
     -DELTANIN_BUILD_TESTS=OFF
     -DELTANIN_BUILD_EXAMPLES=OFF
   BUILD_ALWAYS ON)   # 並行開発 (A-5) で隣接ソースの変更を取りこぼさないため
@@ -231,8 +233,78 @@ ExternalProject_Add(eltanin_external
 - `add_subdirectory` 案は却下した。`eltanin` の `install(EXPORT eltaninTargets)` が
   ament のインストール空間に混ざり、`eltanin_vendor` 自身のターゲットと同じ export セットを
   共有できないためである。
-- **`BUILD_ALWAYS ON` の代償**: `colcon build` のたびに `eltanin` の CMake 再構成が走る (数秒)。
-  並行開発中はこれを受け入れる。リリース時は git URL + 固定リビジョンに切り替える。
+- **`BUILD_ALWAYS ON` の代償**: `colcon build` のたびに `eltanin` の CMake 再構成が走る。
+  実測はクリーン 11.9 s に対し no-op 0.9 s で、並行開発中はこれを受け入れる。
+  リリース時は git URL + 固定リビジョンに切り替える。
+- `project(eltanin_vendor LANGUAGES CXX)` とし、**`CMAKE_CXX_COMPILER` を sub-build に転送する。**
+  `NONE` では `CMAKE_CXX_COMPILER` が定義されず、colcon が選んだコンパイラと sub-build が
+  食い違いうる。`CMAKE_TOOLCHAIN_FILE` と ccache は転送していない (クロスコンパイルも ccache も
+  現状の要件になく、空値を渡す分岐を増やさない)。
+
+**`CMAKE_POSITION_INDEPENDENT_CODE=ON` が必須である理由 (実装フェーズで実測)**
+
+`eltanin` は全モジュールを `STATIC` で宣言し、`CMAKE_POSITION_INDEPENDENT_CODE` を自分では
+設定しない。一方**全ノードは `rclcpp_components` = 共有ライブラリ**である (§3.3 / D-13)。
+非 PIC のアーカイブを共有オブジェクトにリンクすると `R_X86_64_PC32` の再配置エラーになる。
+実測では `CMAKE_BUILD_TYPE` 空 (`-O0`) で `core` / `map` / `map_io` / `planner` の 4 つ、
+`RelWithDebInfo` で `map` / `map_io` の 2 つが失敗した。
+
+**失敗する数は build type とコンパイラに依存し、残りは「たまたま」通る。**これが問題の本体である。
+`eltanin::sensor` だけを使う最初のノードでは表面化せず、後のノードで突然リンクが落ちる。
+最適化設定を変えただけで症状が出たり消えたりもする。したがって PIC は
+**指定漏れを全モジュールについて検出する仕組みごと**必要である。
+
+**リンク検証 (`eltanin_vendor/test/link_check/`)**
+
+`find_package(eltanin)` して**モジュールごとに 1 つの `SHARED` ライブラリ**を作り、
+そのモジュールだけを `WHOLE_ARCHIVE` で全オブジェクト引き込む。`DEPENDS eltanin_external` つきの
+入れ子 `ExternalProject_Add` として構築する (`eltanin` の install は本パッケージの build ステップで
+起きるので、configure 時点では `find_package` が解決しない)。
+
+- **`WHOLE_ARCHIVE` が要る理由**: `SHARED` に静的アーカイブを普通にリンクすると参照された
+  メンバだけが引き込まれるので、非 PIC のオブジェクトが混ざっていても表面化しない。
+- **1 つの `SHARED` に 8 モジュールを並べる形は成立しない** (実測)。`eltanin::map` が
+  `eltanin::core` を PUBLIC 依存するため同じ item が直接と推移で 2 回現れ、CMake が
+  「link item specified without any feature ... has already occurred with the feature
+  'WHOLE_ARCHIVE'」で generate に失敗する。`LINK_LIBRARY_OVERRIDE` で全 item に強制すると
+  `libeltanin_core.a` が 2 回 whole-archive され重複定義でリンクが落ちる。
+  モジュールごとに 1 つなら whole-archive されるアーカイブは常に 1 つで、
+  失敗メッセージにどのモジュールが非 PIC かが出る。
+- **`-Wl,--no-undefined` を付ける。** 全オブジェクトを引き込んだ状態で未解決シンボルが残らない
+  ことを要求する = `eltaninConfig.cmake` の `find_dependency(Eigen3)` / `find_dependency(yaml-cpp)` と
+  export された依存が消費側 prefix で実際に足りていることの検査になる。
+- **ctest にしない。** リンク可能性は「テストの失敗」ではなく「ビルドの失敗」であるべきで、
+  `colcon build` が赤くなる形にしたい。`colcon test` は失敗しても exit 0 なので担保としても弱い。
+- この入れ子プロジェクトだけ `cmake_minimum_required(VERSION 3.24)` である
+  (`WHOLE_ARCHIVE` と `LINK_LIBRARY_OVERRIDE_<item>` が 3.24 以降)。Jazzy / Noble は 3.28。
+
+**`colcon` が `src/eltanin` を勝手にビルドする — `--packages-ignore eltanin` が必須**
+
+colcon は `package.xml` を持たない素の CMake プロジェクトも **`cmake` 型パッケージとして認識する**
+(`colcon list` が `eltanin  src/eltanin  (cmake)` を出す)。対策なしでは `eltanin` が 2 回ビルドされ、
+
+1. **非 PIC の第 2 の prefix `install/eltanin`** ができる。`find_package(eltanin)` から見えうるうえ、
+   どちらが勝つかは `CMAKE_PREFIX_PATH` の順序に依存する = いつか静かに非 PIC 側を引く
+2. `ELTANIN_IS_TOP_LEVEL=ON` なので `ELTANIN_BUILD_TESTS` が既定 ON になり、GTest を要求する
+3. `eltanin` の 432 テストが `colcon test` に混ざり、`eltanin` 側の CI と二重になる
+
+`colcon build` / `colcon test` の**両方**に `--packages-ignore eltanin` を付け、CI と README の
+1 箇所ずつで固定する。`src/eltanin/COLCON_IGNORE` を置く案は C-14 (`eltanin` に ROS 由来の
+ファイルを追加しない) に反するため採らない。`vcs import` 後の CI には存在しないので結局
+フラグが要る点も同じである。**この対策は開発者の記憶に頼るという弱さが残る。**
+
+**却下: `ament_vendor()` を使う案**
+
+Jazzy には `ament_cmake_vendor_package` があり、`VCS_TYPE path` で隣接ソースも扱え、
+コンパイラ / toolchain の転送も済んでいる。それでも採らない。
+
+| 理由 | 内容 |
+|---|---|
+| install 先が `${CMAKE_INSTALL_PREFIX}/opt/eltanin_vendor` になる | 下流が `find_package(eltanin_vendor)` を先に呼ぶか環境フックを撒く必要が生じ、「下流は `find_package(eltanin)` だけ」が崩れる |
+| `BUILD_SHARED_LIBS ON` を既定で強制する | `eltanin` が全ライブラリを明示 `STATIC` で宣言している現状は無害だが、上流の宣言が変わった瞬間に静かに共有ライブラリ化する |
+| `path` モードが `file(GLOB_RECURSE "${VCS_URL}/*")` を configure 依存に登録する | 隣接ソースは開発機では作業ツリーであり `.git/` と `build*/` を含む。数万ファイルが configure 依存になり、`BUILD_ALWAYS ON` (0.9 s) より確実に重い |
+
+自前の `ExternalProject_Add` は 50 行程度で、失敗時の診断メッセージを自分で書ける利点もある。
 
 ### 4.3 `assert` の扱い (Q-8 / D-25)
 
@@ -252,6 +324,16 @@ ExternalProject_Add(eltanin_external
 
 開発時は `--cmake-args -DELTANIN_VENDOR_BUILD_TYPE=Debug` で assert を有効化できる。
 CI は Debug と RelWithDebInfo の両方を回す。
+
+**ただし `ELTANIN_VENDOR_BUILD_TYPE` は assert の有効・無効を完全には支配しない。**
+`eltanin` の事前条件検査の相当部分はヘッダ内のテンプレート / `inline` 関数にあり
+(`GridMap::operator()` / `MapGeometry::index` / `collision_checker.hpp` の判定)、
+**ヘッダ内の `assert` は消費側 TU の `NDEBUG`** = `CMAKE_BUILD_TYPE` に従う。
+`ELTANIN_VENDOR_BUILD_TYPE` が支配するのは `eltanin` の `.cpp` に閉じた部分だけである。
+CI は両者を同じ値で回すので実害はないが、`-DCMAKE_BUILD_TYPE=Debug
+-DELTANIN_VENDOR_BUILD_TYPE=RelWithDebInfo` のような混在では「ヘッダ側の assert だけ生きる」
+状態になる。**したがって上の表の担保 (とくに境界検査つき API のみを使う規約) は
+build type に関係なく必要である。**
 
 ### 4.4 却下: モノリシック構成 / Action サーバ構成
 
@@ -279,16 +361,47 @@ CI は Debug と RelWithDebInfo の両方を回す。
 | `msg/CostmapUpdate.msg` | `std_msgs/Header header` / `uint32 x` / `uint32 y` / `uint32 width` / `uint32 height` / `uint8[] data` | 生値の差分。`map_msgs/OccupancyGridUpdate` は `int8[]` なので生値を運べない。**可視化用には `OccupancyGridUpdate` を別トピックで出し、再定義はしない** |
 | `msg/TrajectoryPoint2D.msg` | `geometry_msgs/Pose2D 相当 (float64 x, y, theta)` / `float64 linear_velocity` / `float64 angular_velocity` / `builtin_interfaces/Duration time_from_start` | E-2。`nav_msgs/Path` にも `eltanin::Path` にも速度がない |
 | `msg/Trajectory2D.msg` | `std_msgs/Header header` / `TrajectoryPoint2D[] points` | 同上。`header.frame_id` は `eltanin_ros` の関心 (D-10) |
-| `msg/NavigationState.msg` | `std_msgs/Header header` / `uint8 state` (定数 6 値) / `uint8 outcome` / `string message` / `float64 distance_remaining` / `uint16 replans` | F-10 / F-19 / NF-5。navyu は結果が外から一切観測できなかった (N-5) |
+| `msg/NavigationState.msg` | `std_msgs/Header header` / `uint8 state` (**定数 7 値**) / `uint8 outcome` (既定 255) / `string message` / `float64 distance_remaining` / `uint16 replans` | F-10 / F-19 / NF-5。navyu は結果が外から一切観測できなかった (N-5) |
 | `action/NavigateToPose.action` | goal: `geometry_msgs/PoseStamped pose` / result: `uint8 outcome` + `string message` + `float64 final_position_error` / feedback: `NavigationState` | ゴール契約。`nav2_msgs` に依存しない (依存を 1 つ減らし、`outcome` を `eltanin` の `NavigateOutcome` に 1:1 で対応させられる) |
-| `action/ComputePathToPose.action` | goal: `PoseStamped goal` + `PoseStamped start` + `bool use_start` / result: `nav_msgs/Path path` + `uint8 outcome` + `string message` | F-5。計画失敗を「無言」にしない (N-5) |
-| `srv/SetEnabled.srv` | request: `bool enabled` / response: `bool success` + `string message` | D-22 (指令出力の有効化) と `local_path_planner` の enable/disable |
+| `action/ComputePathToPose.action` | goal: `PoseStamped goal` + `PoseStamped start` + `bool use_start` / result: `nav_msgs/Path path` + `uint8 outcome` + `string message` / feedback: **空** | F-5。計画失敗を「無言」にしない (N-5) |
+
+**合計 8 インターフェース (msg 6 / action 2)。`srv/` は作らない。**
+
+**却下: `srv/SetEnabled.srv`。**当初は `request: bool enabled` / `response: bool success` +
+`string message` として設計していたが、**これは `std_srvs/SetBool` と形が完全に一致する**
+(`request: bool data` / `response: bool success` + `string message`)。本節冒頭の
+「既存で足りるものは定義しない」に反するので削除し、`~/enable_output` と `~/enable` は
+`std_srvs/SetBool` を使う。`~/update` と `~/reset` で既に `std_srvs/Trigger` を使うので
+依存も増えない。
+
+`ComputePathToPose` の feedback を空のままにするのも同じ立場である。計画は 1 回の呼び出しで
+終わり報告すべき中間進捗がない。入れるものができた時点で足す。
 
 **`outcome` の値は `eltanin` の `NavigateOutcome` (11 値) と 1:1 に対応させる。**
 `Reached` / `ModelFailed` / `StartGoalFailed` / `PlanFailed` / `PathTooShort` / `NoPath` /
-`GoalToleranceFailed` / `ReplanFailed` / `ReplanLimit` / `Stalled` / `StepLimit` に
-ROS 固有の `Canceled` / `Timeout` / `InputStale` を追加する。**対応表は `eltanin_ros_common` の
-1 関数に閉じる。**
+`GoalToleranceFailed` / `ReplanFailed` / `ReplanLimit` / `Stalled` / `StepLimit` の宣言順を
+そのまま `OUTCOME_REACHED=0` .. `OUTCOME_STEP_LIMIT=10` とし、ROS 固有の
+`OUTCOME_CANCELED=11` / `OUTCOME_TIMEOUT=12` / `OUTCOME_INPUT_STALE=13` を追加する。
+**対応表は `eltanin_ros_common` の 1 関数に閉じる。**
+
+- 進行中 (feedback) の値として **`OUTCOME_UNKNOWN=255`** を置き、
+  **`outcome` フィールドの既定値にもする** (`uint8 outcome 255`)。
+  0..13 を使い切るので sentinel は enum の値域外に置く。`OUTCOME_REACHED=0` を「未確定」に
+  流用すると、既定構築したメッセージと進行中の feedback が**成功に見える**。
+- `ComputePathToPose` も同じ値集合を使う。計画段が出さない値 (`Stalled` / `ReplanLimit` 等) は
+  単に出現しない。集合を分けると変換関数が 2 つになる。
+- **定数は `NavigationState.msg` 1 箇所にのみ置く。** rosidl は定数のパッケージ間共有を持たず、
+  定数専用 msg は「利用者が現に存在しない型」を作ることになる。他のインターフェースの
+  `uint8 outcome` にはコメントで参照先を書き、C++ 側は
+  `eltanin_msgs::msg::NavigationState::OUTCOME_*` を参照する。
+- **`OUTCOME_*` はこの時点で確定した wire format である。**`NavigateOutcome` は現在
+  `examples/navigation_loop.hpp` にしかなく vendor 経由では見えないので、
+  1:1 対応をコードで検証できるのは `outcome_conversion.hpp` (S2 後半) と
+  enum が `include/eltanin/navigation/supervisor.hpp` に移る S11 (E-9) である。
+  **そこで enum の並びを変えるなら、`OUTCOME_*` ではなく対応表を明示的に更新する。**
+- `eltanin_msgs/action/NavigateToPose` は `nav2_msgs/action/NavigateToPose` と**同名の別型**である。
+  RViz の Nav2 パネルからは駆動できないので、ゴール入力経路 (`/goal_pose` 購読を足すか) は
+  §6.7 の `navigator` を実装する時点で決める。
 
 ### 5.2 既存メッセージを使うもの
 
@@ -298,6 +411,8 @@ ROS 固有の `Canceled` / `Timeout` / `InputStale` を追加する。**対応�
 | スキャン | `sensor_msgs/LaserScan` (`SensorDataQoS`) |
 | global 経路 | `nav_msgs/Path` |
 | 内部の速度指令 | `geometry_msgs/TwistStamped` (D-21) |
+| 指令出力 / local planner の有効化 | `std_srvs/SetBool` (§5.1 で `SetEnabled` を却下) |
+| 手動トリガ (`~/update` / `~/reset`) | `std_srvs/Trigger` |
 | 最終出力 | `geometry_msgs/Twist` (kachaka の制約) |
 | コストマップの可視化 | `nav_msgs/OccupancyGrid` / `map_msgs/OccupancyGridUpdate` |
 | 予測姿勢の可視化 | `nav_msgs/Path` |
@@ -520,7 +635,7 @@ default_cost = NO_INFORMATION
 | 責務 | global 経路から窓を切り出し、**目標速度を付与した Local trajectory** を出す。段 2 で局所回避を加える |
 | 購読 | `global_path_planner/global_path`、`local_map/local_map`、tf |
 | 公開 | `~/local_trajectory` (`eltanin_msgs/Trajectory2D`)、`~/candidates` (`visualization_msgs/MarkerArray`、段 2 のデバッグ用) |
-| サービス | `~/enable` (`eltanin_msgs/SetEnabled`) |
+| サービス | `~/enable` (`std_srvs/SetBool`) |
 | 周期 | `update_frequency` 既定 20.0 Hz |
 
 **段 1: 窓切り出しと速度プロファイル (回避なし)**
@@ -622,7 +737,7 @@ DWA: `vel_samples` / `omega_samples` / `sim_time` / `sim_steps` / `clearance_ste
 | 責務 | 要求指令を local map に対して予測・制限し、**常に何かを出力する** |
 | 購読 | `path_follower/cmd_vel_raw`、`local_map/local_map`、tf |
 | 公開 | `/cmd_vel` (`geometry_msgs/Twist`)、`~/predicted_poses` (`nav_msgs/Path`)、`~/footprint` (`PolygonStamped`)、`~/diagnostics` |
-| サービス | `~/enable_output` (`eltanin_msgs/SetEnabled`) — **既定 `false` (D-22)** |
+| サービス | `~/enable_output` (`std_srvs/SetBool`) — **既定 `false` (D-22)** |
 | 周期 | `update_frequency` 既定 20.0 Hz。**kachaka の watchdog 0.3 s に対し ≥4 Hz が必須** (C-15) |
 | 使う eltanin API | `collision::VelocityLimiter::limit()` + **E-1 の厳密判定入口** |
 
@@ -809,7 +924,8 @@ eltanin_bringup/config/
 5. eltanin_bringup を autostart_output:=false で起動する
    → collision_predictor は publish しない = teleop が有効化されない = ドック上でも動かない
 6. ★ ロボットがドック上にないことを人が確認する
-7. ros2 service call /collision_predictor/enable_output ... で出力を有効化する
+7. ros2 service call /collision_predictor/enable_output std_srvs/srv/SetBool "{data: true}"
+   で出力を有効化する
    → 以降 20 Hz でゼロ指令を含む指令が出続ける (teleop の 60 s 失効も、
       最初の 1 指令の欠落も、常時 publish が構造的に吸収する)
 8. ゴールを与える
@@ -881,8 +997,9 @@ eltanin_bringup/config/
 ## 9. `eltanin_ros` 側の新規ファイル (パッケージ単位)
 
 ```
-eltanin_msgs/            msg 9 / srv 1 / action 2 (§5.1)
-eltanin_vendor/          CMakeLists.txt (ExternalProject), package.xml
+eltanin_msgs/            msg 6 / action 2 (§5.1。srv は作らない)
+eltanin_vendor/          CMakeLists.txt (ExternalProject), package.xml,
+                         test/link_check/{CMakeLists.txt,link_check.cpp}  ← PIC / 消費経路の検証
 eltanin_ros_common/      include/eltanin_ros_common/*.hpp (9 本, §6.9), src/*.cpp,
                          test/test_cost_conversion.cpp, test_map_conversion.cpp,
                          test_geometry_conversion.cpp, test_scan_conversion.cpp,

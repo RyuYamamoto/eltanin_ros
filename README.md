@@ -112,10 +112,11 @@ compiled. Delete `build/eltanin install/eltanin` and rebuild.
 
 The sub-build always gets `-DCMAKE_POSITION_INDEPENDENT_CODE=ON`. `eltanin` declares every module
 `STATIC` and does not set that variable itself, while every node here is an `rclcpp_components`
-shared library (design §3.3). Without the flag, `eltanin_core`, `eltanin_map`, `eltanin_map_io` and
-`eltanin_planner` fail to link into a shared object with an `R_X86_64_PC32` relocation error, and the
-other four link by accident — so the breakage would surface only once a later node happened to use
-one of the four. `eltanin_vendor/test/link_check/` builds one `SHARED` library per module with
+shared library (design §3.3). Without the flag, linking a module into a shared object fails with an
+`R_X86_64_PC32` relocation error — four of the eight modules at `-O0`, two of them under
+`RelWithDebInfo` — and the rest link by accident. Which ones fail depends on the build type, so the
+breakage would surface only once a later node happened to use one of them, or once someone changed
+the optimization level. `eltanin_vendor/test/link_check/` builds one `SHARED` library per module with
 `WHOLE_ARCHIVE` and `-Wl,--no-undefined` to keep that fixed; it needs CMake 3.24 for the
 `WHOLE_ARCHIVE` link feature, which is why the requirements table above names 3.24 for this package.
 Because it is part of the build rather than a test, a module that cannot be linked turns
