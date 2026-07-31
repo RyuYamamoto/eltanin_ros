@@ -5,8 +5,9 @@
   <version>0.0.0</version>
   <description>
     The conversion layer between eltanin's types and ROS 2 messages, plus the small runtime pieces
-    every node needs. Library only: no nodes, no rclcpp dependency, so that every acceptance
-    condition of this package can be checked with colcon test without starting a node.
+    every node needs. Library only, no nodes. It builds two targets: eltanin_ros_common, the
+    conversion layer, which does not depend on rclcpp, and eltanin_ros_common_runtime, the clock,
+    watchdog and robot profile, which does. Only the tests that construct a node call rclcpp::init.
   </description>
   <maintainer email="ryuyamamoto@pfrobotics.jp">RyuYamamoto</maintainer>
   <license>Apache-2.0</license>
@@ -23,6 +24,8 @@
   <depend>builtin_interfaces</depend>
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
+  <!-- Used by eltanin_ros_common_runtime only; the conversion layer target links nothing of it. -->
+  <depend>rclcpp</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
   <!-- tf2 alone, not tf2_geometry_msgs: tf2/impl/utils.hpp already includes

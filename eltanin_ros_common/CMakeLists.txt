@@ -8,6 +8,7 @@ find_package(eltanin_msgs REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(tf2 REQUIRED)
@@ -49,8 +50,18 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
   tf2::tf2)
 target_compile_options(${PROJECT_NAME} PRIVATE ${warning_options})
 
+# The runtime pieces need rclcpp; the conversion layer above must keep not needing it (D-T5-1), so
+# they are a second target rather than more sources in the first one. A header that includes
+# <rclcpp/...> belongs to this target. The dependency runs this way only, never back.
+add_library(${PROJECT_NAME}_runtime SHARED
+  src/timing.cpp)
+target_link_libraries(${PROJECT_NAME}_runtime PUBLIC ${PROJECT_NAME} rclcpp::rclcpp)
+target_include_directories(${PROJECT_NAME}_runtime PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_options(${PROJECT_NAME}_runtime PRIVATE ${warning_options})
+
 install(DIRECTORY include/ DESTINATION include/${PROJECT_NAME})
-install(TARGETS ${PROJECT_NAME}
+# One export set for both, so a downstream package gets them from one find_package (A-3).
+install(TARGETS ${PROJECT_NAME} ${PROJECT_NAME}_runtime
   EXPORT export_${PROJECT_NAME}
   LIBRARY DESTINATION lib)
 
@@ -64,13 +75,14 @@ ament_export_dependencies(
   builtin_interfaces
   geometry_msgs
   nav_msgs
+  rclcpp
   sensor_msgs
   std_msgs
   tf2)
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
-  # No node is started anywhere in these tests: the whole package is reachable without rclcpp::init.
+  # No node is started anywhere in these tests: the whole target is reachable without rclcpp::init.
   foreach(test_name
       test_conversion_result
       test_cost_conversion
@@ -81,6 +93,15 @@ if(BUILD_TESTING)
       test_outcome_constants)
     ament_add_gtest(${test_name} test/${test_name}.cpp)
     target_link_libraries(${test_name} ${PROJECT_NAME})
+    target_include_directories(${test_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_options(${test_name} PRIVATE ${warning_options})
+  endforeach()
+
+  # Tests of the runtime pieces. Only the ones that construct a node call rclcpp::init (A-5).
+  foreach(test_name
+      test_timing)
+    ament_add_gtest(${test_name} test/${test_name}.cpp)
+    target_link_libraries(${test_name} ${PROJECT_NAME}_runtime)
     target_include_directories(${test_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_options(${test_name} PRIVATE ${warning_options})
   endforeach()
