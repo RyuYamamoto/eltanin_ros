@@ -44,3 +44,11 @@ repos:
     hooks:
       - id: cpplint
         args: [--quiet]
+
+  - repo: local
+    hooks:
+      - id: cost-literals
+        name: cost sentinel literals stay in cost_conversion
+        entry: tools/check_cost_literals.py
+        language: script
+        files: ^[^/]+/(include|src)/.*\.(hpp|cpp)$

@@ -75,7 +75,8 @@ if(BUILD_TESTING)
       test_geometry_conversion
       test_map_conversion
       test_path_conversion
-      test_scan_conversion)
+      test_scan_conversion
+      test_outcome_constants)
     ament_add_gtest(${test_name} test/${test_name}.cpp)
     target_link_libraries(${test_name} ${PROJECT_NAME})
     target_include_directories(${test_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
