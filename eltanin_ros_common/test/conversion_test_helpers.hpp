@@ -17,6 +17,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstddef>
 #include <string>
 
 namespace eltanin_ros_common::test
@@ -38,6 +39,21 @@ inline ::testing::AssertionResult is_one_line(const std::string & text)
     return ::testing::AssertionSuccess();
   }
   return ::testing::AssertionFailure() << "'" << text << "' contains a newline";
+}
+
+/// A nested diagnostic must not repeat the prefix; one rejection reads as one sentence.
+inline ::testing::AssertionResult names_the_package_once(const std::string & text)
+{
+  std::size_t count = 0;
+  for (std::size_t at = text.find("eltanin_ros_common:"); at != std::string::npos;
+       at = text.find("eltanin_ros_common:", at + 1)) {
+    ++count;
+  }
+  if (count == 1) {
+    return ::testing::AssertionSuccess();
+  }
+  return ::testing::AssertionFailure()
+         << "'" << text << "' names the package " << count << " times, expected once";
 }
 
 }  // namespace eltanin_ros_common::test

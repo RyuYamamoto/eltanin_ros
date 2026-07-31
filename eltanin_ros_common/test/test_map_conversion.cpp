@@ -43,6 +43,7 @@ using eltanin_ros_common::to_costmap_msg;
 using eltanin_ros_common::to_occupancy_grid;
 using eltanin_ros_common::test::contains;
 using eltanin_ros_common::test::is_one_line;
+using eltanin_ros_common::test::names_the_package_once;
 
 constexpr double RESOLUTION = 0.05;
 
@@ -234,6 +235,20 @@ TEST(ToCostmapFromGridTest, RejectsARotatedOrigin)
   EXPECT_TRUE(contains(rejected.error(), "yaw"));
   EXPECT_TRUE(contains(rejected.error(), "tolerance"));
   EXPECT_TRUE(is_one_line(rejected.error()));
+}
+
+TEST(ToCostmapFromGridTest, ReportsANestedViolationAsOneSentence)
+{
+  auto zero_quaternion = make_grid(2, 2, {0, 0, 0, 0});
+  zero_quaternion.info.origin.orientation.w = 0.0;
+  const auto quaternion = to_costmap(zero_quaternion, OccupancyThresholds{});
+  ASSERT_FALSE(quaternion.ok());
+  EXPECT_TRUE(names_the_package_once(quaternion.error()));
+  EXPECT_TRUE(contains(quaternion.error(), "origin quaternion"));
+
+  const auto thresholds = to_costmap(make_grid(2, 2, {0, 0, 0, 0}), OccupancyThresholds{25, 65});
+  ASSERT_FALSE(thresholds.ok());
+  EXPECT_TRUE(names_the_package_once(thresholds.error()));
 }
 
 TEST(ToCostmapFromGridTest, AcceptsAnOriginRotationInsideTheTolerance)

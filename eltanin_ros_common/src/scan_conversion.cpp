@@ -14,6 +14,8 @@
 
 #include "eltanin_ros_common/scan_conversion.hpp"
 
+#include "src/diagnostic.hpp"
+
 #include <cmath>
 #include <string>
 #include <utility>
@@ -26,8 +28,10 @@ namespace
 
 std::string reject(const sensor_msgs::msg::LaserScan & msg, const std::string & violation)
 {
-  return "eltanin_ros_common: rejected LaserScan (frame_id='" + msg.header.frame_id + "', " +
-         std::to_string(msg.ranges.size()) + " beams): " + violation;
+  return diagnostic::rejected(
+    "LaserScan (frame_id='" + msg.header.frame_id + "', " + std::to_string(msg.ranges.size()) +
+      " beams)",
+    violation);
 }
 
 }  // namespace

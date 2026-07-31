@@ -31,6 +31,8 @@ add_library(${PROJECT_NAME} SHARED
 target_include_directories(${PROJECT_NAME} PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
   "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>")
+# src/diagnostic.hpp is private: the single shape of a rejection line, not part of the API.
+target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 # PUBLIC: the public headers expose eltanin and message types, so downstream needs both the include
 # directories and the link interface. The three eltanin modules are the ones whose headers appear in
 # include/: core (types, path), map (grid_map) and sensor (scan_projection).

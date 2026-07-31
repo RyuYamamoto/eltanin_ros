@@ -15,6 +15,7 @@
 #include "eltanin_ros_common/path_conversion.hpp"
 
 #include "eltanin_ros_common/geometry_conversion.hpp"
+#include "src/diagnostic.hpp"
 
 #include <cmath>
 #include <cstddef>
@@ -31,8 +32,10 @@ namespace
 std::string reject(
   const std::string & frame_id, std::size_t size, std::size_t index, const std::string & violation)
 {
-  return "eltanin_ros_common: rejected Path (frame_id='" + frame_id + "', " + std::to_string(size) +
-         " poses) at index " + std::to_string(index) + ": " + violation;
+  return diagnostic::rejected(
+    "Path (frame_id='" + frame_id + "', " + std::to_string(size) + " poses) at index " +
+      std::to_string(index),
+    violation);
 }
 
 }  // namespace
@@ -77,7 +80,7 @@ ConversionResult<eltanin::Path> to_path(const nav_msgs::msg::Path & msg)
     const ConversionResult<eltanin::Pose2D> pose = to_pose2d(stamped.pose);
     if (!pose.ok()) {
       return ConversionResult<eltanin::Path>::failure(
-        reject(msg.header.frame_id, msg.poses.size(), i, pose.error()));
+        reject(msg.header.frame_id, msg.poses.size(), i, diagnostic::nested(pose.error())));
     }
     poses.push_back(pose.value());
   }

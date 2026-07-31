@@ -28,6 +28,7 @@ using eltanin_ros_common::to_path;
 using eltanin_ros_common::to_path_msg;
 using eltanin_ros_common::test::contains;
 using eltanin_ros_common::test::is_one_line;
+using eltanin_ros_common::test::names_the_package_once;
 
 constexpr double NOT_A_NUMBER = std::numeric_limits<double>::quiet_NaN();
 
@@ -134,6 +135,7 @@ TEST(ToPathTest, RejectsABadQuaternionAndNamesTheIndex)
   EXPECT_FALSE(rejected.ok());
   EXPECT_TRUE(contains(rejected.error(), "index 1"));
   EXPECT_TRUE(contains(rejected.error(), "norm"));
+  EXPECT_TRUE(names_the_package_once(rejected.error()));
 }
 
 TEST(ToPathTest, RejectsANonFinitePosition)

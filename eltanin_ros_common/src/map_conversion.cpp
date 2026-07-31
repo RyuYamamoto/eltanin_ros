@@ -15,6 +15,7 @@
 #include "eltanin_ros_common/map_conversion.hpp"
 
 #include "eltanin_ros_common/geometry_conversion.hpp"
+#include "src/diagnostic.hpp"
 
 #include <eltanin/map/map_geometry.hpp>
 
@@ -47,7 +48,7 @@ std::string describe(
 
 std::string reject(const std::string & context, const std::string & violation)
 {
-  return "eltanin_ros_common: rejected " + context + ": " + violation;
+  return diagnostic::rejected(context, violation);
 }
 
 std::string tolerance_suffix(double value, double tolerance)
@@ -97,7 +98,8 @@ ConversionStatus check_origin_rotation(
 {
   const ConversionResult<RollPitch> roll_pitch = to_roll_pitch(rotation);
   if (!roll_pitch.ok()) {
-    return ConversionStatus::failure(reject(context, roll_pitch.error()));
+    return ConversionStatus::failure(
+      reject(context, "origin " + diagnostic::nested(roll_pitch.error())));
   }
   if (std::abs(roll_pitch.value().roll) > ORIGIN_ROTATION_TOLERANCE) {
     return ConversionStatus::failure(reject(
@@ -111,7 +113,7 @@ ConversionStatus check_origin_rotation(
   }
   const ConversionResult<double> yaw = to_yaw(rotation);
   if (!yaw.ok()) {
-    return ConversionStatus::failure(reject(context, yaw.error()));
+    return ConversionStatus::failure(reject(context, "origin " + diagnostic::nested(yaw.error())));
   }
   if (std::abs(yaw.value()) > ORIGIN_ROTATION_TOLERANCE) {
     return ConversionStatus::failure(
@@ -164,7 +166,7 @@ ConversionResult<eltanin::map::Costmap> to_costmap(
   const ConversionStatus thresholds_status = validate(thresholds);
   if (!thresholds_status.ok()) {
     return ConversionResult<eltanin::map::Costmap>::failure(
-      reject(context, thresholds_status.message()));
+      reject(context, diagnostic::nested(thresholds_status.message())));
   }
   const ConversionStatus grid = check_grid(
     context, msg.info.resolution, msg.info.width, msg.info.height, msg.data.size(),

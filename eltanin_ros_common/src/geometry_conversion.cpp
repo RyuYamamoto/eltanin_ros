@@ -14,6 +14,8 @@
 
 #include "eltanin_ros_common/geometry_conversion.hpp"
 
+#include "src/diagnostic.hpp"
+
 #include <eltanin/core/angle.hpp>
 #include <tf2/LinearMath/Quaternion.hpp>
 #include <tf2/utils.hpp>
@@ -47,13 +49,13 @@ ConversionStatus check_quaternion(const geometry_msgs::msg::Quaternion & msg)
     !std::isfinite(msg.x) || !std::isfinite(msg.y) || !std::isfinite(msg.z) ||
     !std::isfinite(msg.w)) {
     return ConversionStatus::failure(
-      "eltanin_ros_common: rejected " + describe(msg) + ": components must be finite");
+      diagnostic::rejected(describe(msg), "components must be finite"));
   }
   const double norm = std::sqrt(msg.x * msg.x + msg.y * msg.y + msg.z * msg.z + msg.w * msg.w);
   if (std::abs(norm - 1.0) > QUATERNION_NORM_TOLERANCE) {
-    return ConversionStatus::failure(
-      "eltanin_ros_common: rejected " + describe(msg) + ": norm is " + std::to_string(norm) +
-      ", tolerance around 1 is " + std::to_string(QUATERNION_NORM_TOLERANCE));
+    return ConversionStatus::failure(diagnostic::rejected(
+      describe(msg), "norm is " + std::to_string(norm) + ", tolerance around 1 is " +
+                       std::to_string(QUATERNION_NORM_TOLERANCE)));
   }
   return ConversionStatus::success();
 }
@@ -99,9 +101,10 @@ geometry_msgs::msg::Quaternion to_quaternion(double yaw)
 ConversionResult<eltanin::Pose2D> to_pose2d(const geometry_msgs::msg::Pose & msg)
 {
   if (!std::isfinite(msg.position.x) || !std::isfinite(msg.position.y)) {
-    return ConversionResult<eltanin::Pose2D>::failure(
-      "eltanin_ros_common: rejected pose position (x=" + std::to_string(msg.position.x) +
-      ", y=" + std::to_string(msg.position.y) + "): both must be finite");
+    return ConversionResult<eltanin::Pose2D>::failure(diagnostic::rejected(
+      "pose position (x=" + std::to_string(msg.position.x) +
+        ", y=" + std::to_string(msg.position.y) + ")",
+      "both must be finite"));
   }
   const ConversionResult<double> yaw = to_yaw(msg.orientation);
   if (!yaw.ok()) {
@@ -124,9 +127,10 @@ geometry_msgs::msg::Pose to_pose_msg(const eltanin::Pose2D & pose)
 ConversionResult<eltanin::Twist2D> to_twist2d(const geometry_msgs::msg::Twist & msg)
 {
   if (!std::isfinite(msg.linear.x) || !std::isfinite(msg.angular.z)) {
-    return ConversionResult<eltanin::Twist2D>::failure(
-      "eltanin_ros_common: rejected twist (linear.x=" + std::to_string(msg.linear.x) +
-      ", angular.z=" + std::to_string(msg.angular.z) + "): both must be finite");
+    return ConversionResult<eltanin::Twist2D>::failure(diagnostic::rejected(
+      "twist (linear.x=" + std::to_string(msg.linear.x) +
+        ", angular.z=" + std::to_string(msg.angular.z) + ")",
+      "both must be finite"));
   }
   return ConversionResult<eltanin::Twist2D>::success(
     eltanin::Twist2D{Eigen::Vector2d{msg.linear.x, 0.0}, msg.angular.z});
@@ -147,11 +151,11 @@ ConversionResult<Transform2DConversion> to_transform2d(
   if (
     !std::isfinite(translation.x) || !std::isfinite(translation.y) ||
     !std::isfinite(translation.z)) {
-    return ConversionResult<Transform2DConversion>::failure(
-      "eltanin_ros_common: rejected transform " + msg.header.frame_id + " to " +
-      msg.child_frame_id + " translation (x=" + std::to_string(translation.x) +
-      ", y=" + std::to_string(translation.y) + ", z=" + std::to_string(translation.z) +
-      "): all three must be finite");
+    return ConversionResult<Transform2DConversion>::failure(diagnostic::rejected(
+      "transform " + msg.header.frame_id + " to " + msg.child_frame_id +
+        " translation (x=" + std::to_string(translation.x) +
+        ", y=" + std::to_string(translation.y) + ", z=" + std::to_string(translation.z) + ")",
+      "all three must be finite"));
   }
   const ConversionResult<double> yaw = to_yaw(msg.transform.rotation);
   if (!yaw.ok()) {

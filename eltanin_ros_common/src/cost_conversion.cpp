@@ -14,6 +14,8 @@
 
 #include "eltanin_ros_common/cost_conversion.hpp"
 
+#include "src/diagnostic.hpp"
+
 #include <eltanin/map/cost_values.hpp>
 
 #include <cassert>
@@ -40,19 +42,21 @@ constexpr int VISUALIZED_DIVISOR = VISUALIZED_COST_MAX - 1;
 ConversionStatus validate(const OccupancyThresholds & thresholds)
 {
   if (thresholds.free_threshold < 0) {
-    return ConversionStatus::failure(
-      "eltanin_ros_common: free_threshold is " + std::to_string(thresholds.free_threshold) +
-      ", must be at least 0");
+    return ConversionStatus::failure(diagnostic::rejected(
+      "occupancy thresholds",
+      "free_threshold is " + std::to_string(thresholds.free_threshold) + ", must be at least 0"));
   }
   if (thresholds.occupied_threshold > OCCUPANCY_MAX) {
-    return ConversionStatus::failure(
-      "eltanin_ros_common: occupied_threshold is " + std::to_string(thresholds.occupied_threshold) +
-      ", must be at most " + std::to_string(OCCUPANCY_MAX));
+    return ConversionStatus::failure(diagnostic::rejected(
+      "occupancy thresholds", "occupied_threshold is " +
+                                std::to_string(thresholds.occupied_threshold) +
+                                ", must be at most " + std::to_string(OCCUPANCY_MAX)));
   }
   if (thresholds.free_threshold >= thresholds.occupied_threshold) {
-    return ConversionStatus::failure(
-      "eltanin_ros_common: free_threshold " + std::to_string(thresholds.free_threshold) +
-      " must be below occupied_threshold " + std::to_string(thresholds.occupied_threshold));
+    return ConversionStatus::failure(diagnostic::rejected(
+      "occupancy thresholds", "free_threshold " + std::to_string(thresholds.free_threshold) +
+                                " must be below occupied_threshold " +
+                                std::to_string(thresholds.occupied_threshold)));
   }
   return ConversionStatus::success();
 }
