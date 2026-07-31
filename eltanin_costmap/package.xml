@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>eltanin_costmap</name>
+  <version>0.0.0</version>
+  <description>
+    The costmap nodes. global_costmap owns the inflated whole-area costmap and the belief a replan
+    runs against: it is rebuilt when /map arrives and when ~/update is called, and never from a
+    timer, because regenerating 16 million cells takes 0.285 s. local_map is added in task 15.
+  </description>
+  <maintainer email="ryuyamamoto@pfrobotics.jp">RyuYamamoto</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- eltanin has no package.xml and therefore no rosdep key; the vendor package is what can be
+       declared. Library target names (eltanin::map and friends) are never dependencies (N-10). -->
+  <depend>eltanin_vendor</depend>
+  <depend>eltanin_msgs</depend>
+  <depend>eltanin_ros_common</depend>
+  <depend>nav_msgs</depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_components</depend>
+  <depend>std_srvs</depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
