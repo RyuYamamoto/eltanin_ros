@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>eltanin_vendor</name>
+  <version>0.0.0</version>
+  <description>
+    Builds and installs eltanin, a ROS-independent C++20 2D navigation library, into this package's
+    prefix through ExternalProject so that downstream packages can use find_package(eltanin).
+    eltanin itself never gains a package.xml or any other ROS file.
+  </description>
+  <maintainer email="ryuyamamoto@pfrobotics.jp">RyuYamamoto</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <!-- Needed by the ELTANIN_VENDOR_GIT_URL path, which is a supported mode of this package even
+       though the default builds the adjacent source tree. -->
+  <buildtool_depend>git</buildtool_depend>
+
+  <!-- eltaninConfig.cmake calls find_dependency(Eigen3 3.4 NO_MODULE) and
+       find_dependency(yaml-cpp), so both have to be present when a downstream package configures,
+       not only when eltanin is built. eigen3_cmake_module is not needed: the config file uses
+       Eigen3Config.cmake directly. -->
+  <depend>eigen</depend>
+  <depend>yaml-cpp</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
