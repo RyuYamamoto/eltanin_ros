@@ -24,7 +24,8 @@ endif()
 
 add_library(${PROJECT_NAME} SHARED
   src/cost_conversion.cpp
-  src/geometry_conversion.cpp)
+  src/geometry_conversion.cpp
+  src/map_conversion.cpp)
 target_include_directories(${PROJECT_NAME} PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
   "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>")
@@ -69,7 +70,8 @@ if(BUILD_TESTING)
   foreach(test_name
       test_conversion_result
       test_cost_conversion
-      test_geometry_conversion)
+      test_geometry_conversion
+      test_map_conversion)
     ament_add_gtest(${test_name} test/${test_name}.cpp)
     target_link_libraries(${test_name} ${PROJECT_NAME})
     target_include_directories(${test_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
