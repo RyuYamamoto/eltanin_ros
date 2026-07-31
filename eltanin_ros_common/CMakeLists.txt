@@ -23,7 +23,8 @@ if(ELTANIN_ROS_ENABLE_WERROR)
 endif()
 
 add_library(${PROJECT_NAME} SHARED
-  src/cost_conversion.cpp)
+  src/cost_conversion.cpp
+  src/geometry_conversion.cpp)
 target_include_directories(${PROJECT_NAME} PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
   "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>")
@@ -67,7 +68,8 @@ if(BUILD_TESTING)
   # No node is started anywhere in these tests: the whole package is reachable without rclcpp::init.
   foreach(test_name
       test_conversion_result
-      test_cost_conversion)
+      test_cost_conversion
+      test_geometry_conversion)
     ament_add_gtest(${test_name} test/${test_name}.cpp)
     target_link_libraries(${test_name} ${PROJECT_NAME})
     target_include_directories(${test_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
