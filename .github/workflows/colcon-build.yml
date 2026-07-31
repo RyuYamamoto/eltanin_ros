@@ -1,0 +1,53 @@
+name: colcon-build
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: rostooling/setup-ros-docker:ubuntu-noble-ros-jazzy-ros-base-latest
+    strategy:
+      # Debug and RelWithDebInfo carry independent information (eltanin keeps its
+      # precondition assert()s only when NDEBUG is undefined / R-18), so never drop
+      # one result because the other failed.
+      fail-fast: false
+      matrix:
+        build_type: [Debug, RelWithDebInfo]
+
+    steps:
+      # Check out into src/eltanin_ros so that eltanin_vendor's ../../eltanin resolves to
+      # src/eltanin, which is where vcs import places it (D-24).
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          path: src/eltanin_ros
+
+      - name: Import dependency repositories
+        run: vcs import src < src/eltanin_ros/.repos
+
+      - name: Install dependencies
+        run: |
+          rosdep update --rosdistro jazzy
+          rosdep install -y --from-paths src --ignore-src --rosdistro jazzy
+
+      # -Wall -Wextra -Wpedantic are applied per target with target_compile_options(PRIVATE)
+      # by each package, not through CMAKE_CXX_FLAGS, so that they do not leak into the
+      # eltanin_vendor ExternalProject or into rosidl generated code.
+      - name: Build
+        run: |
+          . /opt/ros/jazzy/setup.sh
+          colcon build --symlink-install --cmake-args --no-warn-unused-cli \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DELTANIN_VENDOR_BUILD_TYPE=${{ matrix.build_type }} \
+            -DELTANIN_ROS_ENABLE_WERROR=ON
+
+      # colcon test exits 0 even when tests fail, so test-result converts failures to
+      # a non-zero exit status.
+      - name: Test
+        run: |
+          . /opt/ros/jazzy/setup.sh
+          colcon test --event-handlers console_direct+
+          colcon test-result --verbose

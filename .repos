@@ -1,0 +1,5 @@
+# vcs import src < .repos
+# Task 3 adds the eltanin entry here. It must be imported to src/eltanin so that
+# eltanin_vendor's default source path (../../eltanin) resolves both in CI and locally.
+# Keep the repositories key present even while empty: vcs import rejects a comment-only file.
+repositories: {}
