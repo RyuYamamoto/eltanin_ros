@@ -99,6 +99,7 @@ if(BUILD_TESTING)
 
   # Tests of the runtime pieces. Only the ones that construct a node call rclcpp::init (A-5).
   foreach(test_name
+      test_stale_input
       test_timing)
     ament_add_gtest(${test_name} test/${test_name}.cpp)
     target_link_libraries(${test_name} ${PROJECT_NAME}_runtime)
