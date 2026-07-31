@@ -1,0 +1,17 @@
+# Navigate to a pose. Deliberately not nav2_msgs/action/NavigateToPose: keeping our own removes a
+# dependency and lets outcome map 1:1 onto eltanin's NavigateOutcome.
+#
+# The type is unrelated to the identically named nav2_msgs action, so the RViz Nav2 panel cannot
+# drive this server.
+
+# Goal
+geometry_msgs/PoseStamped pose
+---
+# Result
+# outcome uses the OUTCOME_* constants of eltanin_msgs/NavigationState.
+uint8 outcome
+string message
+float64 final_position_error
+---
+# Feedback
+NavigationState state

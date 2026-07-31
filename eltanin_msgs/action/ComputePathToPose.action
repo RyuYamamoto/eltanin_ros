@@ -1,0 +1,21 @@
+# Plan a path to a pose. Exists so that a planning failure is reported rather than silent.
+#
+# use_start selects between planning from start and planning from the robot's current pose; start is
+# ignored when it is false.
+
+# Goal
+geometry_msgs/PoseStamped goal
+geometry_msgs/PoseStamped start
+bool use_start
+---
+# Result
+# outcome uses the OUTCOME_* constants of eltanin_msgs/NavigationState. Values a planner cannot
+# produce, such as OUTCOME_STALLED, simply never appear; the value set is shared so that the
+# conversion from NavigateOutcome stays a single function.
+nav_msgs/Path path
+uint8 outcome
+string message
+---
+# Feedback
+# Empty: planning here is a single call with no intermediate progress to report. A field is added
+# when there is something to put in it.
