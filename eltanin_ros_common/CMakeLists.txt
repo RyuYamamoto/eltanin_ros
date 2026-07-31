@@ -54,8 +54,12 @@ target_compile_options(${PROJECT_NAME} PRIVATE ${warning_options})
 # they are a second target rather than more sources in the first one. A header that includes
 # <rclcpp/...> belongs to this target. The dependency runs this way only, never back.
 add_library(${PROJECT_NAME}_runtime SHARED
+  src/robot_profile.cpp
   src/timing.cpp)
 target_link_libraries(${PROJECT_NAME}_runtime PUBLIC ${PROJECT_NAME} rclcpp::rclcpp)
+# PRIVATE: robot_profile.cpp calls VelocityLimiter::create() as the last backstop of its validation
+# (A-29), but no public header names eltanin::collision, so it stays out of the link interface.
+target_link_libraries(${PROJECT_NAME}_runtime PRIVATE eltanin::collision)
 target_include_directories(${PROJECT_NAME}_runtime PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_options(${PROJECT_NAME}_runtime PRIVATE ${warning_options})
 
@@ -99,6 +103,7 @@ if(BUILD_TESTING)
 
   # Tests of the runtime pieces. Only the ones that construct a node call rclcpp::init (A-5).
   foreach(test_name
+      test_robot_profile
       test_stale_input
       test_timing)
     ament_add_gtest(${test_name} test/${test_name}.cpp)
