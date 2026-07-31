@@ -169,6 +169,8 @@ TEST(PeriodicClockTest, ResetMakesTheNextTickFirst)
   EXPECT_FALSE(tick.usable());
 }
 
+#ifdef NDEBUG
+/// Only under NDEBUG: with asserts live a null clock is meant to abort in the constructor instead.
 TEST(PeriodicClockTest, NullClockNeverProducesAUsableTick)
 {
   PeriodicClock periodic(nullptr);
@@ -176,6 +178,7 @@ TEST(PeriodicClockTest, NullClockNeverProducesAUsableTick)
   EXPECT_FALSE(periodic.tick().usable());
   EXPECT_FALSE(periodic.tick().usable());
 }
+#endif
 
 }  // namespace
 }  // namespace eltanin_ros_common::test
