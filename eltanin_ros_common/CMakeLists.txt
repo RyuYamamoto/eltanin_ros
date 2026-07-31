@@ -111,6 +111,13 @@ if(BUILD_TESTING)
     target_include_directories(${test_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_options(${test_name} PRIVATE ${warning_options})
   endforeach()
+
+  # E-1 pinned from the ROS side: the vendored default and behaviour, not a copy of eltanin's test.
+  # eltanin::collision is PRIVATE here, so the library's public link interface is unchanged.
+  ament_add_gtest(test_exact_footprint_regression test/test_exact_footprint_regression.cpp)
+  target_link_libraries(test_exact_footprint_regression ${PROJECT_NAME} eltanin::collision)
+  target_include_directories(test_exact_footprint_regression PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_compile_options(test_exact_footprint_regression PRIVATE ${warning_options})
 endif()
 
 ament_package()
