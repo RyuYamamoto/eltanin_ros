@@ -426,8 +426,7 @@ TEST(ToOccupancyGridTest, DoesNotSurviveARoundTripThroughTheStaticMapThresholds)
   EXPECT_NE(back.value().data(), raw);
 }
 
-/// A 4x3 map whose cells are all distinct, so a transposed or shifted patch cannot pass by
-/// accident.
+/// A 4x3 map of distinct cells, so a transposed or shifted patch cannot pass by accident.
 eltanin::map::Costmap make_numbered_costmap()
 {
   std::vector<std::uint8_t> data(12);

@@ -20,6 +20,7 @@ if(ELTANIN_ROS_ENABLE_WERROR)
 endif()
 
 add_library(${PROJECT_NAME} SHARED
+  src/observation_store.cpp
   src/update_region.cpp)
 target_include_directories(${PROJECT_NAME} PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
@@ -38,6 +39,7 @@ install(TARGETS ${PROJECT_NAME} LIBRARY DESTINATION lib)
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   foreach(test_name
+      test_observation_store
       test_update_region)
     ament_add_gtest(${test_name} test/${test_name}.cpp)
     target_link_libraries(${test_name} ${PROJECT_NAME})
