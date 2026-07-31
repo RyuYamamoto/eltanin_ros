@@ -21,6 +21,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <numbers>
@@ -32,6 +33,7 @@
 namespace
 {
 
+using eltanin::map::CellRect;
 using eltanin::map::FREE_SPACE;
 using eltanin::map::INSCRIBED_INFLATED_OBSTACLE;
 using eltanin::map::LETHAL_OBSTACLE;
@@ -40,6 +42,7 @@ using eltanin_ros_common::MapLimits;
 using eltanin_ros_common::OccupancyThresholds;
 using eltanin_ros_common::to_costmap;
 using eltanin_ros_common::to_costmap_msg;
+using eltanin_ros_common::to_costmap_update_msg;
 using eltanin_ros_common::to_occupancy_grid;
 using eltanin_ros_common::test::contains;
 using eltanin_ros_common::test::is_one_line;
@@ -421,6 +424,130 @@ TEST(ToOccupancyGridTest, DoesNotSurviveARoundTripThroughTheStaticMapThresholds)
   const auto back = to_costmap(msg.value(), OccupancyThresholds{});
   ASSERT_TRUE(back.ok()) << back.error();
   EXPECT_NE(back.value().data(), raw);
+}
+
+/// A 4x3 map whose cells are all distinct, so a transposed or shifted patch cannot pass by
+/// accident.
+eltanin::map::Costmap make_numbered_costmap()
+{
+  std::vector<std::uint8_t> data(12);
+  for (std::size_t at = 0; at < data.size(); ++at) {
+    data[at] = static_cast<std::uint8_t>(at + 1);
+  }
+  return make_costmap(4, 3, data);
+}
+
+/// The independent definition of the patch: read the same rectangle back through get().
+std::vector<std::uint8_t> cut_out(const eltanin::map::Costmap & costmap, const CellRect & rect)
+{
+  std::vector<std::uint8_t> expected;
+  for (int my = rect.min_y; my <= rect.max_y; ++my) {
+    for (int mx = rect.min_x; mx <= rect.max_x; ++mx) {
+      expected.push_back(costmap.get(mx, my).value());
+    }
+  }
+  return expected;
+}
+
+TEST(ToCostmapUpdateMsgTest, CutsOutTheRectangleTheCallerAsked)
+{
+  const eltanin::map::Costmap costmap = make_numbered_costmap();
+  const CellRect rect{1, 1, 2, 2};
+  const auto msg = to_costmap_update_msg(costmap, rect, "map", make_stamp(7, 8));
+  ASSERT_TRUE(msg.ok()) << msg.error();
+  EXPECT_EQ(msg.value().x, 1u);
+  EXPECT_EQ(msg.value().y, 1u);
+  EXPECT_EQ(msg.value().width, 2u);
+  EXPECT_EQ(msg.value().height, 2u);
+  EXPECT_EQ(msg.value().data.size(), msg.value().width * msg.value().height);
+  EXPECT_EQ(msg.value().data, cut_out(costmap, rect));
+  EXPECT_EQ(msg.value().header.frame_id, "map");
+  EXPECT_EQ(msg.value().header.stamp.sec, 7);
+  EXPECT_EQ(msg.value().header.stamp.nanosec, 8u);
+}
+
+TEST(ToCostmapUpdateMsgTest, KeepsTheRowOrderSoAPatchIsNotTransposed)
+{
+  const eltanin::map::Costmap costmap = make_numbered_costmap();
+  const auto msg = to_costmap_update_msg(costmap, CellRect{1, 0, 2, 1}, "map", make_stamp(0, 0));
+  ASSERT_TRUE(msg.ok()) << msg.error();
+  const std::vector<std::uint8_t> expected{2, 3, 6, 7};
+  EXPECT_EQ(msg.value().data, expected);
+}
+
+TEST(ToCostmapUpdateMsgTest, AFullMapRectangleIsTheWholeCellVector)
+{
+  const eltanin::map::Costmap costmap = make_numbered_costmap();
+  const auto msg = to_costmap_update_msg(costmap, CellRect{0, 0, 3, 2}, "map", make_stamp(0, 0));
+  ASSERT_TRUE(msg.ok()) << msg.error();
+  EXPECT_EQ(msg.value().data, costmap.data());
+  EXPECT_EQ(msg.value().width, 4u);
+  EXPECT_EQ(msg.value().height, 3u);
+}
+
+TEST(ToCostmapUpdateMsgTest, ASingleCellRectangleIsOneByte)
+{
+  const eltanin::map::Costmap costmap = make_numbered_costmap();
+  const auto msg = to_costmap_update_msg(costmap, CellRect{3, 2, 3, 2}, "map", make_stamp(0, 0));
+  ASSERT_TRUE(msg.ok()) << msg.error();
+  const std::vector<std::uint8_t> expected{12};
+  EXPECT_EQ(msg.value().data, expected);
+}
+
+TEST(ToCostmapUpdateMsgTest, RejectsARectangleThatDoesNotFitTheMap)
+{
+  const eltanin::map::Costmap costmap = make_numbered_costmap();
+  const auto too_wide =
+    to_costmap_update_msg(costmap, CellRect{0, 0, 4, 2}, "map", make_stamp(0, 0));
+  EXPECT_FALSE(too_wide.ok());
+  EXPECT_TRUE(contains(too_wide.error(), "does not fit a 4x3 map"));
+  EXPECT_TRUE(contains(too_wide.error(), "max 4,2"));
+  EXPECT_TRUE(is_one_line(too_wide.error()));
+
+  const auto too_tall =
+    to_costmap_update_msg(costmap, CellRect{0, 0, 3, 3}, "map", make_stamp(0, 0));
+  EXPECT_FALSE(too_tall.ok());
+  EXPECT_TRUE(contains(too_tall.error(), "does not fit a 4x3 map"));
+}
+
+TEST(ToCostmapUpdateMsgTest, RejectsARectangleBeforeTheFirstCell)
+{
+  const auto rejected =
+    to_costmap_update_msg(make_numbered_costmap(), CellRect{-1, 0, 1, 1}, "map", make_stamp(0, 0));
+  EXPECT_FALSE(rejected.ok());
+  EXPECT_TRUE(contains(rejected.error(), "starts before the first cell"));
+  EXPECT_TRUE(is_one_line(rejected.error()));
+}
+
+TEST(ToCostmapUpdateMsgTest, RejectsAnInvertedRectangleRatherThanWrappingAround)
+{
+  const auto rejected =
+    to_costmap_update_msg(make_numbered_costmap(), CellRect{2, 0, 1, 1}, "map", make_stamp(0, 0));
+  EXPECT_FALSE(rejected.ok());
+  EXPECT_TRUE(contains(rejected.error(), "min must not exceed max"));
+  EXPECT_TRUE(names_the_package_once(rejected.error()));
+}
+
+TEST(ToCostmapUpdateMsgTest, RejectsTheSameDegenerateMapsAsTheFullTopic)
+{
+  const auto no_geometry =
+    to_costmap_update_msg(eltanin::map::Costmap{}, CellRect{0, 0, 0, 0}, "map", make_stamp(0, 0));
+  EXPECT_FALSE(no_geometry.ok());
+  EXPECT_TRUE(contains(no_geometry.error(), "resolution"));
+
+  const auto no_cells =
+    to_costmap_update_msg(make_costmap(0, 0, {}), CellRect{0, 0, 0, 0}, "map", make_stamp(0, 0));
+  EXPECT_FALSE(no_cells.ok());
+}
+
+TEST(ToCostmapUpdateMsgTest, CarriesTheReservedValuesTheVisualizationTopicCannot)
+{
+  const std::vector<std::uint8_t> raw{
+    FREE_SPACE, INSCRIBED_INFLATED_OBSTACLE, LETHAL_OBSTACLE, NO_INFORMATION};
+  const auto msg =
+    to_costmap_update_msg(make_costmap(4, 1, raw), CellRect{0, 0, 3, 0}, "map", make_stamp(0, 0));
+  ASSERT_TRUE(msg.ok()) << msg.error();
+  EXPECT_EQ(msg.value().data, raw);
 }
 
 }  // namespace

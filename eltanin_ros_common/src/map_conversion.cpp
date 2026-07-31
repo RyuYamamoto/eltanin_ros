@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -147,6 +148,28 @@ ConversionStatus check_costmap(const std::string & context, const eltanin::map::
   return ConversionStatus::success();
 }
 
+/// The patch a node computed from an inflation radius; growing a rectangle is where off-by-r lands.
+ConversionStatus check_rect(
+  const std::string & context, const eltanin::map::CellRect & rect,
+  const eltanin::map::MapGeometry & geometry)
+{
+  const std::string where = "rect (min " + std::to_string(rect.min_x) + "," +
+                            std::to_string(rect.min_y) + " max " + std::to_string(rect.max_x) +
+                            "," + std::to_string(rect.max_y) + ")";
+  if (rect.min_x > rect.max_x || rect.min_y > rect.max_y) {
+    return ConversionStatus::failure(reject(context, where + " is empty: min must not exceed max"));
+  }
+  if (rect.min_x < 0 || rect.min_y < 0) {
+    return ConversionStatus::failure(reject(context, where + " starts before the first cell"));
+  }
+  if (rect.max_x >= geometry.size_x() || rect.max_y >= geometry.size_y()) {
+    return ConversionStatus::failure(reject(
+      context, where + " does not fit a " + std::to_string(geometry.size_x()) + "x" +
+                 std::to_string(geometry.size_y()) + " map"));
+  }
+  return ConversionStatus::success();
+}
+
 eltanin::map::MapGeometry make_geometry(
   std::size_t width, std::size_t height, double resolution, double origin_x, double origin_y)
 {
@@ -229,6 +252,50 @@ ConversionResult<eltanin_msgs::msg::Costmap> to_costmap_msg(
   msg.info.origin_y = geometry.origin().y();
   msg.data = costmap.data();
   return ConversionResult<eltanin_msgs::msg::Costmap>::success(std::move(msg));
+}
+
+ConversionResult<eltanin_msgs::msg::CostmapUpdate> to_costmap_update_msg(
+  const eltanin::map::Costmap & costmap, const eltanin::map::CellRect & rect,
+  const std::string & frame_id, const builtin_interfaces::msg::Time & stamp)
+{
+  using Result = ConversionResult<eltanin_msgs::msg::CostmapUpdate>;
+  const eltanin::map::MapGeometry & geometry = costmap.geometry();
+  const std::string context = describe(
+    "eltanin_msgs/CostmapUpdate", frame_id, geometry.resolution(),
+    static_cast<std::size_t>(std::max(0, geometry.size_x())),
+    static_cast<std::size_t>(std::max(0, geometry.size_y())));
+  const ConversionStatus costmap_status = check_costmap(context, costmap);
+  if (!costmap_status.ok()) {
+    return Result::failure(costmap_status.message());
+  }
+  const ConversionStatus rect_status = check_rect(context, rect, geometry);
+  if (!rect_status.ok()) {
+    return Result::failure(rect_status.message());
+  }
+
+  const std::size_t width = static_cast<std::size_t>(rect.max_x - rect.min_x) + 1;
+  const std::size_t height = static_cast<std::size_t>(rect.max_y - rect.min_y) + 1;
+  eltanin_msgs::msg::CostmapUpdate msg;
+  msg.header.frame_id = frame_id;
+  msg.header.stamp = stamp;
+  msg.x = static_cast<std::uint32_t>(rect.min_x);
+  msg.y = static_cast<std::uint32_t>(rect.min_y);
+  msg.width = static_cast<std::uint32_t>(width);
+  msg.height = static_cast<std::uint32_t>(height);
+  msg.data.resize(width * height);
+
+  // Both layouts are row major with the same x order, so a patch is a row-wise copy: no transpose.
+  const std::size_t stride = static_cast<std::size_t>(geometry.size_x());
+  const auto first_cell = costmap.data().begin();
+  for (std::size_t row = 0; row < height; ++row) {
+    const std::size_t source =
+      (static_cast<std::size_t>(rect.min_y) + row) * stride + static_cast<std::size_t>(rect.min_x);
+    const auto row_begin = first_cell + static_cast<std::ptrdiff_t>(source);
+    std::copy(
+      row_begin, row_begin + static_cast<std::ptrdiff_t>(width),
+      msg.data.begin() + static_cast<std::ptrdiff_t>(row * width));
+  }
+  return Result::success(std::move(msg));
 }
 
 ConversionResult<nav_msgs::msg::OccupancyGrid> to_occupancy_grid(

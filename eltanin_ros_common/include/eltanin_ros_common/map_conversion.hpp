@@ -22,6 +22,7 @@
 #include <eltanin/map/grid_map.hpp>
 
 #include <eltanin_msgs/msg/costmap.hpp>
+#include <eltanin_msgs/msg/costmap_update.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 
 #include <cstddef>
@@ -49,6 +50,11 @@ ConversionResult<eltanin::map::Costmap> to_costmap(
 ConversionResult<eltanin_msgs::msg::Costmap> to_costmap_msg(
   const eltanin::map::Costmap & costmap, const std::string & frame_id,
   const builtin_interfaces::msg::Time & stamp);
+
+/// One rectangular patch in raw costs; the rectangle is checked against the map, not trusted.
+ConversionResult<eltanin_msgs::msg::CostmapUpdate> to_costmap_update_msg(
+  const eltanin::map::Costmap & costmap, const eltanin::map::CellRect & rect,
+  const std::string & frame_id, const builtin_interfaces::msg::Time & stamp);
 
 /// For visualization only; the cost range is compressed and does not survive a round trip.
 ConversionResult<nav_msgs::msg::OccupancyGrid> to_occupancy_grid(
