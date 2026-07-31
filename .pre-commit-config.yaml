@@ -52,3 +52,8 @@ repos:
         entry: tools/check_cost_literals.py
         language: script
         files: ^[^/]+/(include|src)/.*\.(hpp|cpp)$
+      - id: robot-params
+        name: robot.* and frames.* stay in robot_profile
+        entry: tools/check_robot_params.py
+        language: script
+        files: ^[^/]+/(include|src)/.*\.(hpp|cpp)$

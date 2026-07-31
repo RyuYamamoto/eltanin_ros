@@ -139,7 +139,7 @@ creates it, so that nothing looks available before it is.
 | `eltanin_ros` | metapackage (`ament_package` only) | **implemented** |
 | `eltanin_vendor` | builds and installs `eltanin` via `ExternalProject` | **implemented** |
 | `eltanin_msgs` | msg / action definitions, interfaces only | **implemented** |
-| `eltanin_ros_common` | conversions, clock, watchdog, TF, parameter validation | **conversion layer implemented**; clock, watchdog and robot profile in task 5 |
+| `eltanin_ros_common` | conversions, clock, watchdog, TF, parameter validation | **conversions, clock, watchdog and robot profile implemented**; TF helper in task 6 |
 | `eltanin_costmap` | `global_costmap` and `local_map` nodes | not implemented (tasks 6, 15) |
 | `eltanin_planner` | `global_path_planner` and `local_path_planner` nodes | not implemented (tasks 7, 17, 19) |
 | `eltanin_controller` | `path_follower` and `collision_predictor` nodes | not implemented (tasks 11, 12) |
@@ -150,12 +150,26 @@ creates it, so that nothing looks available before it is.
 The metapackage's `package.xml` lists one `exec_depend` per implemented package, so the list is also
 the list of what exists.
 
-## The conversion layer (`eltanin_ros_common`)
+## `eltanin_ros_common`
+
+The package has no nodes and builds two library targets. Which one a header belongs to is readable
+from the header itself: one that includes `<rclcpp/...>` is a runtime piece.
+
+| Target | Headers | `rclcpp` |
+|---|---|---|
+| `eltanin_ros_common` | `conversion_result.hpp`, `cost_conversion.hpp`, `geometry_conversion.hpp`, `map_conversion.hpp`, `path_conversion.hpp`, `scan_conversion.hpp`, `warn_once.hpp` | no |
+| `eltanin_ros_common_runtime` | `stale_input.hpp`, `timing.hpp`, `robot_profile.hpp` | yes |
+
+Both are installed through one export set, so a downstream package gets them from a single
+`find_package(eltanin_ros_common)`. The runtime target links the conversion layer publicly, so a node
+that links the runtime target gets both; **the dependency never runs the other way.** The conversion
+layer's `ldd` has no `librclcpp` in it and that is checked, not assumed. Only the tests that
+construct a node call `rclcpp::init()`, and today that is one file, `test_robot_profile.cpp`.
+
+### The conversion layer
 
 Everything that crosses between `eltanin`'s types and ROS 2 messages is converted here and nowhere
-else: cost value ranges, quaternions, twists, transforms, scans, maps and paths. The package has no
-nodes and does not depend on `rclcpp`, so all of its behaviour is checked by `colcon test` without
-starting a node.
+else: cost value ranges, quaternions, twists, transforms, scans, maps and paths.
 
 Conversions never throw. A conversion that can fail returns `ConversionResult<T>`, a check that
 produces no value returns `ConversionStatus`, and a rejection carries **one line** naming the frame,
@@ -211,6 +225,53 @@ one a publisher filled in with zeros itself.
   `rclcpp`, so this package builds the `tf2::Quaternion` from the four fields itself and calls
   `tf2::getYaw` / `tf2::getEulerYPR` on that.
 
+### The runtime pieces
+
+Three small types, each shaped so that a check the nodes must not forget cannot be skipped. The
+value of each one is the shape, not the code, so these rules are part of the type:
+
+- **`robot.*` and `frames.*` are never declared or read in a node.** `declare_robot_profile(node)`
+  is the only path; take the footprint, the radii, the inflation cost model, the velocity limits and
+  the frame ids from the `RobotProfile` it returns. It never throws and never logs: check `ok()`,
+  and on failure log `error()` and refuse to start. A node holds the profile as a `const
+  RobotProfile` member filled in the constructor initializer list — `RobotProfile` has no default
+  constructor precisely so that "not validated yet" is not a state a node can be in.
+- **`PeriodicClock` does not clamp `dt`, and there is no nominal period in it.** It takes the node's
+  clock (`node->get_clock()`, so `use_sim_time` applies) and nothing else. `tick().seconds` is always
+  the measurement, including zero and negative; `tick().usable()` is the predicate, and a cycle
+  whose tick is not usable is skipped **by the caller**, which is also where an upper bound on `dt`
+  belongs if one is wanted.
+- **The stamp given to `StaleInput::update()` is `header.stamp` for a sensor input and
+  `clock->now()` at reception for something produced inside the stack.** The deadline is checked on
+  both sides, so a stamp far in the future is stale too; a clock that jumped recovers on the next
+  update. A timeout that is not positive and finite makes every `get()` stale rather than unlimited,
+  and `timeout_is_usable()` says so.
+
+`StaleInput::get(now)` returns a pointer that is valid **until the next `update()` and no longer
+than the holder**. Do not store it. Combined with the shared-state rule of design §3.3 — one mutex
+around one struct, callbacks copy and leave — the holder lives inside that struct, `get()` is called
+under the lock, and anything that needs the value **copies it there and releases the lock**.
+
+`declare_robot_profile()` reports **the first violated condition only**, and the order is fixed:
+footprint length, then non-finite vertices, then degeneracy, convexity and the origin, then
+`inflation_radius` against the circumscribed radius, then `cost_scaling_factor`, the four velocity
+limits and the frame ids. Finiteness has to come before the geometry, because `signed_area()` of a
+polygon with a `NaN` vertex is not near zero and `contains()` is false everywhere, so a `NaN`
+footprint would be reported as a perfectly ordinary non-convex shape. After all of that the three
+`create()` calls in `eltanin` are made for real, and a `nullopt` from any of them is a rejection even
+though no condition above explains it.
+
+The code defaults are the kachaka measurements, so a node with no parameters at all starts with the
+real robot's shape. `robot/kachaka.yaml` (task 22) repeats those numbers and **the yaml is the
+authority**; the code defaults are pinned by `test_robot_profile` so a drift is visible. A different
+robot must always be given its own profile. Write `robot.footprint` values **with a decimal point**:
+`[0, 0, 1, 0]` is an integer array to the parameter server and is rejected — with one line saying
+so, not with a crash, but rejected.
+
+`exact_footprint_check` is deliberately **not** a parameter. It is the fix for E-1 and a knob on it
+is a knob on whether the robot notices obstacles; `test_exact_footprint_regression` pins both the
+default and the behaviour from this side of the vendor boundary.
+
 ### Types whose first real user comes later
 
 `WarnOnceLatch` and `StampedScan` have no node using them yet — the tests are their only callers.
@@ -218,6 +279,25 @@ They exist because the acceptance conditions they serve cannot be met otherwise:
 able to invent a `laser_frame`, so the scan conversion returns the frame and stamp together with the
 `ScanData` (which carries neither), and a broken 2D assumption must not be silently dropped nor
 logged once per cycle. First users are tasks 11, 12 and 15.
+
+The same is true of the three runtime pieces: `RobotProfile` is first consumed by `global_costmap`
+(task 6), `StaleInput` and `PeriodicClock` by `path_follower` and `collision_predictor` (tasks 11 and
+12), and `StaleInput` again by `local_map` (task 15). If the shape does not fit its first real user,
+change it there rather than working around it.
+
+### Corrections to the design document
+
+Recorded here rather than by editing `docs/design/eltaninnavyuros.md`, same as for the conversions:
+
+- §6.9 says `StaleInput::get(now)` returns `nullopt` when stale. It returns a pointer instead;
+  `std::optional<T>` would copy a 16 MB costmap every cycle.
+- §6.9 counts nine headers for this package. There are ten public ones: the seven of the conversion
+  layer and the three runtime pieces. `outcome_conversion.hpp` is not among them (tasks 20 and 21),
+  and `src/diagnostic.hpp` is private and not installed.
+- §4.3 (D-25) lists the smoother weights among the `create()` calls that return `nullopt`. They are
+  not: `weight_data + 4 * weight_smooth < 2` is an `assert` in `planner::detail`, so it is not
+  checked at all under `RelWithDebInfo`. Task 7 validates it at the ROS boundary.
+- §6.9 describes the package as `rclcpp`-free. That holds for the conversion layer target only.
 
 ## Launch
 
@@ -259,6 +339,12 @@ pre-commit run clang-format --all-files
   `65` and `25` occur too often in ordinary code, and a hook with false positives gets disabled.
   Tests are exempt — writing the table's values down is what a test is for. The hook is a fence, not
   a proof; nothing stops a second implementation that spells the values differently.
+- A second local hook, `tools/check_robot_params.py`, fails if `declare_parameter("robot.` or
+  `declare_parameter("frames.` appears outside `robot_profile.{hpp,cpp}`. It also catches
+  `get_parameter`, which the acceptance condition did not ask for: reading those keys outside
+  `robot_profile` skips the validation just as effectively as declaring them, and there is no honest
+  reason to do it. Tests are exempt, and it is a fence rather than a proof for the same reason as
+  the one above.
 
 ### Compiler warnings
 
