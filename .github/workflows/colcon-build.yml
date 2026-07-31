@@ -25,8 +25,11 @@ jobs:
         with:
           path: src/eltanin_ros
 
+      # .repos pins eltanin to a branch, so record the exact revision that this run built.
       - name: Import dependency repositories
-        run: vcs import src < src/eltanin_ros/.repos
+        run: |
+          vcs import src < src/eltanin_ros/.repos
+          vcs export --exact src
 
       - name: Install dependencies
         run: |
@@ -36,10 +39,17 @@ jobs:
       # -Wall -Wextra -Wpedantic are applied per target with target_compile_options(PRIVATE)
       # by each package, not through CMAKE_CXX_FLAGS, so that they do not leak into the
       # eltanin_vendor ExternalProject or into rosidl generated code.
+      #
+      # --packages-ignore eltanin: colcon discovers src/eltanin as a plain `cmake` package even
+      # without a package.xml. Building it would create a second, non-PIC install/eltanin prefix
+      # that find_package(eltanin) can resolve to instead of the vendor's, would enable eltanin's
+      # own tests (they are ON when eltanin is the top-level project, and they need GTest), and
+      # would duplicate eltanin's CI. eltanin_vendor is the only thing that builds eltanin here.
       - name: Build
         run: |
           . /opt/ros/jazzy/setup.sh
-          colcon build --symlink-install --cmake-args --no-warn-unused-cli \
+          colcon build --symlink-install --packages-ignore eltanin \
+            --cmake-args --no-warn-unused-cli \
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
             -DELTANIN_VENDOR_BUILD_TYPE=${{ matrix.build_type }} \
             -DELTANIN_ROS_ENABLE_WERROR=ON
@@ -49,5 +59,5 @@ jobs:
       - name: Test
         run: |
           . /opt/ros/jazzy/setup.sh
-          colcon test --event-handlers console_direct+
+          colcon test --packages-ignore eltanin --event-handlers console_direct+
           colcon test-result --verbose

@@ -4,13 +4,16 @@
   <name>eltanin_ros</name>
   <version>0.0.0</version>
   <description>
-    Metapackage for the eltanin_ros navigation stack. The dependency list is intentionally empty:
-    a dependency on each package is added as that package is implemented.
+    Metapackage for the eltanin_ros navigation stack. A dependency on each package is added as that
+    package is implemented, so the list below is also the list of what exists.
   </description>
   <maintainer email="ryuyamamoto@pfrobotics.jp">RyuYamamoto</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>eltanin_vendor</exec_depend>
+  <exec_depend>eltanin_msgs</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

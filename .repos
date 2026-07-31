@@ -1,5 +1,21 @@
 # vcs import src < .repos
-# Task 3 adds the eltanin entry here. It must be imported to src/eltanin so that
-# eltanin_vendor's default source path (../../eltanin) resolves both in CI and locally.
-# Keep the repositories key present even while empty: vcs import rejects a comment-only file.
-repositories: {}
+#
+# eltanin has to land in src/eltanin: that is what eltanin_vendor's default source path
+# (../../eltanin) resolves to, in CI and locally alike.
+#
+# Do not run this on a machine where src/eltanin is your own working copy. vcs import moves HEAD.
+#
+# version is a branch rather than a SHA so that CI follows eltanin while the two repositories are
+# developed together. The cost is a non-deterministic CI, so the workflow prints
+# `vcs export --exact src` and the log records which eltanin was actually built. Release builds
+# switch to a fixed revision and to eltanin_vendor's ELTANIN_VENDOR_GIT_URL path (D-24).
+#
+# colcon discovers src/eltanin as a plain `cmake` package even though it has no package.xml, so
+# every colcon build and colcon test needs --packages-ignore eltanin. Without that flag colcon
+# builds eltanin a second time into a non-PIC install/eltanin prefix that find_package(eltanin) can
+# resolve to, and which prefix wins depends on the order of CMAKE_PREFIX_PATH.
+repositories:
+  eltanin:
+    type: git
+    url: https://github.com/RyuYamamoto/eltanin.git
+    version: dev
