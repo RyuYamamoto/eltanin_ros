@@ -14,15 +14,21 @@
 
 #include "eltanin_planner/global_path_planner.hpp"
 
+#include "eltanin_planner/plan_attempt.hpp"
 #include "src/diagnostic.hpp"
 
+#include <eltanin/planner/path_smoother.hpp>
 #include <eltanin_ros_common/geometry_conversion.hpp>
 #include <eltanin_ros_common/map_conversion.hpp>
+#include <eltanin_ros_common/path_conversion.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <tf2/exceptions.hpp>
 
+#include <eltanin_msgs/msg/navigation_state.hpp>
+
 #include <tf2_ros/create_timer_ros.h>
 
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -127,6 +133,21 @@ std::int64_t to_nanoseconds(const builtin_interfaces::msg::Time & stamp)
   return rclcpp::Time(stamp).nanoseconds();
 }
 
+rclcpp::QoS path_qos()
+{
+  // volatile: a late subscriber must not be handed the path of a goal that was already discarded.
+  return rclcpp::QoS(rclcpp::KeepLast(1)).reliable();
+}
+
+/// Elapsed computation time must not follow use_sim_time, where it would read as zero (D-P6-8).
+std::string milliseconds_between(
+  const std::chrono::steady_clock::time_point & from,
+  const std::chrono::steady_clock::time_point & to)
+{
+  const std::chrono::duration<double, std::milli> elapsed = to - from;
+  return std::to_string(elapsed.count());
+}
+
 }  // namespace
 
 GlobalPathPlanner::GlobalPathPlanner(const rclcpp::NodeOptions & options)
@@ -154,9 +175,231 @@ GlobalPathPlanner::GlobalPathPlanner(const rclcpp::NodeOptions & options)
     [this](eltanin_msgs::msg::CostmapUpdate::ConstSharedPtr msg) { on_costmap_update(msg); },
     belief_options);
 
+  action_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+
+  path_publisher_ = create_publisher<nav_msgs::msg::Path>("~/global_path", path_qos());
+  if (parameters_.publish_raw_path) {
+    raw_path_publisher_ = create_publisher<nav_msgs::msg::Path>("~/global_path_raw", path_qos());
+  }
+
+  action_server_ = rclcpp_action::create_server<Action>(
+    this, "~/compute_path_to_pose",
+    [this](const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const Action::Goal> goal) {
+      return handle_goal(uuid, std::move(goal));
+    },
+    [this](const std::shared_ptr<GoalHandle> handle) { return handle_cancel(handle); },
+    [this](const std::shared_ptr<GoalHandle> handle) { handle_accepted(handle); },
+    rcl_action_server_get_default_options(), action_group_);
+
+  worker_ = std::thread([this]() { run(); });
+
   RCLCPP_INFO(
     get_logger(), "waiting for %s before the first plan can run",
     costmap_subscription_->get_topic_name());
+}
+
+GlobalPathPlanner::~GlobalPathPlanner()
+{
+  {
+    const std::lock_guard<std::mutex> lock(work_mutex_);
+    stopping_ = true;
+  }
+  work_cv_.notify_one();
+  if (worker_.joinable()) {
+    worker_.join();
+  }
+
+  std::shared_ptr<GoalHandle> left_waiting;
+  {
+    const std::lock_guard<std::mutex> lock(work_mutex_);
+    left_waiting = std::exchange(pending_, nullptr);
+  }
+  if (left_waiting) {
+    terminate_preempted(left_waiting);
+  }
+}
+
+rclcpp_action::GoalResponse GlobalPathPlanner::handle_goal(
+  const rclcpp_action::GoalUUID &, std::shared_ptr<const Action::Goal>)
+{
+  return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+}
+
+rclcpp_action::CancelResponse GlobalPathPlanner::handle_cancel(const std::shared_ptr<GoalHandle> &)
+{
+  return rclcpp_action::CancelResponse::ACCEPT;
+}
+
+void GlobalPathPlanner::handle_accepted(const std::shared_ptr<GoalHandle> & handle)
+{
+  std::shared_ptr<GoalHandle> displaced;
+  {
+    const std::lock_guard<std::mutex> lock(work_mutex_);
+    // At most one goal waits; a newer one displaces the waiting goal before it ever ran (P-3).
+    displaced = std::exchange(pending_, handle);
+    if (active_) {
+      preempt_active_ = true;
+    }
+  }
+  if (displaced) {
+    terminate_preempted(displaced);
+  }
+  work_cv_.notify_one();
+}
+
+void GlobalPathPlanner::run()
+{
+  for (;;) {
+    std::shared_ptr<GoalHandle> handle;
+    {
+      std::unique_lock<std::mutex> lock(work_mutex_);
+      work_cv_.wait(lock, [this]() { return stopping_ || pending_ != nullptr; });
+      if (stopping_) {
+        return;
+      }
+      handle = std::exchange(pending_, nullptr);
+      active_ = handle;
+      preempt_active_ = false;
+    }
+
+    execute(handle);
+    {
+      const std::lock_guard<std::mutex> lock(work_mutex_);
+      active_.reset();
+      preempt_active_ = false;
+    }
+  }
+}
+
+void GlobalPathPlanner::abort_with(
+  const std::shared_ptr<GoalHandle> & handle, std::uint8_t outcome, const std::string & message)
+{
+  auto result = std::make_shared<Action::Result>();
+  result->outcome = outcome;
+  result->message = diagnostic::flatten(message);
+  handle->abort(result);
+  RCLCPP_ERROR(get_logger(), "%s", result->message.c_str());
+}
+
+void GlobalPathPlanner::terminate_preempted(const std::shared_ptr<GoalHandle> & handle)
+{
+  auto result = std::make_shared<Action::Result>();
+  result->outcome = eltanin_msgs::msg::NavigationState::OUTCOME_CANCELED;
+  result->message = diagnostic::line("the goal was preempted by a newer goal");
+  handle->abort(result);
+}
+
+bool GlobalPathPlanner::interrupted(const std::shared_ptr<GoalHandle> & handle)
+{
+  if (handle->is_canceling()) {
+    auto result = std::make_shared<Action::Result>();
+    result->outcome = eltanin_msgs::msg::NavigationState::OUTCOME_CANCELED;
+    result->message = diagnostic::line("the goal was canceled; no path is published");
+    handle->canceled(result);
+    RCLCPP_INFO(get_logger(), "%s", result->message.c_str());
+    return true;
+  }
+
+  bool preempted = false;
+  {
+    const std::lock_guard<std::mutex> lock(work_mutex_);
+    preempted = preempt_active_;
+  }
+  if (!preempted) {
+    return false;
+  }
+  terminate_preempted(handle);
+  return true;
+}
+
+void GlobalPathPlanner::execute(const std::shared_ptr<GoalHandle> & handle)
+{
+  using eltanin_msgs::msg::NavigationState;
+  const std::shared_ptr<const Action::Goal> goal = handle->get_goal();
+  if (interrupted(handle)) {
+    return;
+  }
+
+  const std::shared_ptr<const eltanin::map::Costmap> costmap = snapshot();
+  if (costmap == nullptr) {
+    abort_with(
+      handle, NavigationState::OUTCOME_INPUT_STALE,
+      diagnostic::line(
+        std::string("no costmap has arrived on ") + costmap_subscription_->get_topic_name() +
+        " yet; there is nothing to plan against"));
+    return;
+  }
+
+  const eltanin_ros_common::ConversionResult<eltanin::Pose2D> goal_pose =
+    resolve_pose(goal->goal, "goal");
+  if (!goal_pose.ok()) {
+    abort_with(handle, NavigationState::OUTCOME_START_GOAL_FAILED, goal_pose.error());
+    return;
+  }
+  const eltanin_ros_common::ConversionResult<eltanin::Pose2D> start_pose =
+    goal->use_start ? resolve_pose(goal->start, "start") : robot_pose();
+  if (!start_pose.ok()) {
+    abort_with(handle, NavigationState::OUTCOME_START_GOAL_FAILED, start_pose.error());
+    return;
+  }
+
+  if (interrupted(handle)) {
+    return;
+  }
+
+  const auto search_started = std::chrono::steady_clock::now();
+  const PlanAttempt attempt =
+    attempt_plan(*costmap, model_, start_pose.value(), goal_pose.value(), parameters_);
+  const auto search_finished = std::chrono::steady_clock::now();
+  if (!attempt.ok()) {
+    abort_with(handle, to_outcome(attempt.failure), attempt.message);
+    return;
+  }
+
+  if (interrupted(handle)) {
+    return;
+  }
+
+  const eltanin::Path smoothed =
+    eltanin::planner::smooth(attempt.path, *costmap, model_, parameters_.smoother);
+  const auto smoothing_finished = std::chrono::steady_clock::now();
+
+  if (interrupted(handle)) {
+    return;
+  }
+
+  const rclcpp::Time stamp = now();
+  const std::string & map_frame = profile_.frames().map;
+  const eltanin_ros_common::ConversionResult<nav_msgs::msg::Path> path_msg =
+    eltanin_ros_common::to_path_msg(smoothed, map_frame, stamp);
+  if (!path_msg.ok()) {
+    abort_with(handle, NavigationState::OUTCOME_PLAN_FAILED, path_msg.error());
+    return;
+  }
+
+  if (raw_path_publisher_) {
+    const eltanin_ros_common::ConversionResult<nav_msgs::msg::Path> raw_msg =
+      eltanin_ros_common::to_path_msg(attempt.path, map_frame, stamp);
+    if (raw_msg.ok()) {
+      raw_path_publisher_->publish(raw_msg.value());
+    } else {
+      RCLCPP_WARN(get_logger(), "%s", raw_msg.error().c_str());
+    }
+  }
+
+  // Published before succeed() so the topic already carries the path the result announces (P-6).
+  path_publisher_->publish(path_msg.value());
+
+  auto result = std::make_shared<Action::Result>();
+  result->path = path_msg.value();
+  result->outcome = NavigationState::OUTCOME_REACHED;
+  result->message = diagnostic::line(
+    "planned " + std::to_string(smoothed.size()) + " poses, " +
+    std::to_string(eltanin::path_length(smoothed)) + " m, searched in " +
+    milliseconds_between(search_started, search_finished) + " ms, smoothed in " +
+    milliseconds_between(search_finished, smoothing_finished) + " ms");
+  handle->succeed(result);
+  RCLCPP_INFO(get_logger(), "%s", result->message.c_str());
 }
 
 std::shared_ptr<const eltanin::map::Costmap> GlobalPathPlanner::snapshot() const

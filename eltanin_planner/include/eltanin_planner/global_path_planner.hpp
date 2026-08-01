@@ -22,17 +22,23 @@
 #include <eltanin_ros_common/robot_profile.hpp>
 #include <eltanin_ros_common/warn_once.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <rclcpp_action/rclcpp_action.hpp>
 
+#include <eltanin_msgs/action/compute_path_to_pose.hpp>
 #include <eltanin_msgs/msg/costmap.hpp>
 #include <eltanin_msgs/msg/costmap_update.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <nav_msgs/msg/path.hpp>
 
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
 
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <string>
+#include <thread>
 
 namespace eltanin_planner
 {
@@ -43,9 +49,30 @@ class GlobalPathPlanner : public rclcpp::Node
 public:
   explicit GlobalPathPlanner(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
 
+  /// Stops the worker and terminates whatever goal it held; a destroyed handle never answers.
+  ~GlobalPathPlanner() override;
+
 private:
+  using Action = eltanin_msgs::action::ComputePathToPose;
+  using GoalHandle = rclcpp_action::ServerGoalHandle<Action>;
+
   void on_costmap(eltanin_msgs::msg::Costmap::ConstSharedPtr msg);
   void on_costmap_update(eltanin_msgs::msg::CostmapUpdate::ConstSharedPtr msg);
+
+  /// Never inspects the goal: a rejection carries no result, so no outcome could be reported.
+  rclcpp_action::GoalResponse handle_goal(
+    const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const Action::Goal> goal);
+  rclcpp_action::CancelResponse handle_cancel(const std::shared_ptr<GoalHandle> & handle);
+  void handle_accepted(const std::shared_ptr<GoalHandle> & handle);
+
+  void run();
+  void execute(const std::shared_ptr<GoalHandle> & handle);
+
+  /// The only place a cancellation or a preemption is observed; the search cannot be interrupted.
+  bool interrupted(const std::shared_ptr<GoalHandle> & handle);
+  void terminate_preempted(const std::shared_ptr<GoalHandle> & handle);
+  void abort_with(
+    const std::shared_ptr<GoalHandle> & handle, std::uint8_t outcome, const std::string & message);
 
   /// The pointer a plan runs against; taken under the lock and then read without it.
   std::shared_ptr<const eltanin::map::Costmap> snapshot() const;
@@ -84,6 +111,22 @@ private:
 
   tf2_ros::Buffer tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+
+  /// The action server alone; handle_goal, handle_cancel and handle_accepted all return at once.
+  rclcpp::CallbackGroup::SharedPtr action_group_;
+  rclcpp_action::Server<Action>::SharedPtr action_server_;
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_publisher_;
+  /// Only created when publish_raw_path is set; a topic nobody publishes is not created.
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr raw_path_publisher_;
+
+  /// One worker, so that "at most one plan runs" is a property of the code and not of the executor.
+  std::thread worker_;
+  std::mutex work_mutex_;
+  std::condition_variable work_cv_;
+  std::shared_ptr<GoalHandle> pending_;
+  std::shared_ptr<GoalHandle> active_;
+  bool preempt_active_{false};
+  bool stopping_{false};
 };
 
 }  // namespace eltanin_planner
