@@ -25,6 +25,10 @@
 
 #include <eltanin_msgs/msg/costmap.hpp>
 #include <eltanin_msgs/msg/costmap_update.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
+
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
 
 #include <cstdint>
 #include <memory>
@@ -46,10 +50,20 @@ private:
   /// The pointer a plan runs against; taken under the lock and then read without it.
   std::shared_ptr<const eltanin::map::Costmap> snapshot() const;
 
+  /// Resolves one PoseStamped into frames.map; an empty frame_id is a rejection, never an
+  /// assumption.
+  eltanin_ros_common::ConversionResult<eltanin::Pose2D> resolve_pose(
+    const geometry_msgs::msg::PoseStamped & msg, const char * what);
+
+  /// frames.map to frames.base at the latest available time; the plan starts where the robot is.
+  eltanin_ros_common::ConversionResult<eltanin::Pose2D> robot_pose();
+
   const eltanin_ros_common::RobotProfile profile_;
   const PlannerParameters parameters_;
   /// The threshold global_costmap inflated with; the same robot.* yaml has to reach both nodes.
   const eltanin::map::CostTraversabilityModel model_;
+  /// A deliberate departure from the design's timeout of 0, which is for periodic work (D-T7-7).
+  const rclcpp::Duration tf_timeout_;
 
   /// Both costmap subscriptions, so that replacing and patching the belief cannot interleave.
   rclcpp::CallbackGroup::SharedPtr belief_group_;
@@ -66,6 +80,10 @@ private:
   eltanin_ros_common::WarnOnceLatch patch_no_map_latch_;
   eltanin_ros_common::WarnOnceLatch patch_frame_latch_;
   eltanin_ros_common::WarnOnceLatch patch_reject_latch_;
+  eltanin_ros_common::WarnOnceLatch planarity_latch_;
+
+  tf2_ros::Buffer tf_buffer_;
+  std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 };
 
 }  // namespace eltanin_planner

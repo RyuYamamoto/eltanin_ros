@@ -16,8 +16,12 @@
 
 #include "src/diagnostic.hpp"
 
+#include <eltanin_ros_common/geometry_conversion.hpp>
 #include <eltanin_ros_common/map_conversion.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
+#include <tf2/exceptions.hpp>
+
+#include <tf2_ros/create_timer_ros.h>
 
 #include <cstdint>
 #include <limits>
@@ -115,6 +119,9 @@ rclcpp::QoS patch_qos()
   return rclcpp::QoS(rclcpp::KeepLast(1)).reliable();
 }
 
+/// tf2 reads a zero time as "the latest available", which is what a plan without a stamp wants.
+const rclcpp::Time LATEST_AVAILABLE(0, 0, RCL_ROS_TIME);
+
 std::int64_t to_nanoseconds(const builtin_interfaces::msg::Time & stamp)
 {
   return rclcpp::Time(stamp).nanoseconds();
@@ -126,8 +133,15 @@ GlobalPathPlanner::GlobalPathPlanner(const rclcpp::NodeOptions & options)
 : rclcpp::Node("global_path_planner", options),
   profile_(require_robot_profile(*this)),
   parameters_(require_parameters(*this)),
-  model_(profile_.inflation_cost_model().circumscribed_cost(), parameters_.unknown_is_free)
+  model_(profile_.inflation_cost_model().circumscribed_cost(), parameters_.unknown_is_free),
+  tf_timeout_(rclcpp::Duration::from_seconds(parameters_.tf_lookup_timeout)),
+  tf_buffer_(get_clock())
 {
+  tf_buffer_.setCreateTimerInterface(std::make_shared<tf2_ros::CreateTimerROS>(
+    get_node_base_interface(), get_node_timers_interface()));
+  // spin_thread: a blocking lookup on the worker must not depend on a free executor thread (P-2).
+  tf_listener_ = std::make_shared<tf2_ros::TransformListener>(tf_buffer_, this, true);
+
   belief_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
   rclcpp::SubscriptionOptions belief_options;
@@ -149,6 +163,79 @@ std::shared_ptr<const eltanin::map::Costmap> GlobalPathPlanner::snapshot() const
 {
   const std::lock_guard<std::mutex> lock(belief_mutex_);
   return costmap_;
+}
+
+eltanin_ros_common::ConversionResult<eltanin::Pose2D> GlobalPathPlanner::resolve_pose(
+  const geometry_msgs::msg::PoseStamped & msg, const char * what)
+{
+  using Result = eltanin_ros_common::ConversionResult<eltanin::Pose2D>;
+  const std::string & map_frame = profile_.frames().map;
+  if (msg.header.frame_id.empty()) {
+    return Result::failure(diagnostic::rejected(
+      what, "its header.frame_id is empty; frames.map '" + map_frame + "' is not assumed"));
+  }
+
+  eltanin_ros_common::ConversionResult<eltanin::Pose2D> pose =
+    eltanin_ros_common::to_pose2d(msg.pose);
+  if (!pose.ok()) {
+    return Result::failure(diagnostic::rejected(what, diagnostic::flatten(pose.error())));
+  }
+  if (msg.header.frame_id == map_frame) {
+    return pose;
+  }
+
+  const rclcpp::Time at(msg.header.stamp);
+  geometry_msgs::msg::TransformStamped transform;
+  try {
+    transform = tf_buffer_.lookupTransform(map_frame, msg.header.frame_id, at, tf_timeout_);
+  } catch (const tf2::TransformException & error) {
+    return Result::failure(diagnostic::rejected(
+      what, "'" + msg.header.frame_id + "' to frames.map '" + map_frame + "' at " +
+              std::to_string(at.nanoseconds()) + " ns is not available within " +
+              std::to_string(tf_timeout_.seconds()) + " s: " + diagnostic::flatten(error.what())));
+  }
+
+  const eltanin_ros_common::ConversionResult<eltanin_ros_common::Transform2DConversion> converted =
+    eltanin_ros_common::to_transform2d(transform);
+  if (!converted.ok()) {
+    return Result::failure(diagnostic::rejected(what, diagnostic::flatten(converted.error())));
+  }
+  if (!converted.value().deviation.within_tolerance && planarity_latch_.should_warn()) {
+    RCLCPP_WARN(
+      get_logger(), "the transform from '%s' to '%s' is out of plane by z %f m, roll %f, pitch %f",
+      msg.header.frame_id.c_str(), map_frame.c_str(), converted.value().deviation.z,
+      converted.value().deviation.roll, converted.value().deviation.pitch);
+  }
+  return Result::success(converted.value().transform * pose.value());
+}
+
+eltanin_ros_common::ConversionResult<eltanin::Pose2D> GlobalPathPlanner::robot_pose()
+{
+  using Result = eltanin_ros_common::ConversionResult<eltanin::Pose2D>;
+  const std::string & map_frame = profile_.frames().map;
+  const std::string & base_frame = profile_.frames().base;
+  geometry_msgs::msg::TransformStamped transform;
+  try {
+    transform = tf_buffer_.lookupTransform(map_frame, base_frame, LATEST_AVAILABLE, tf_timeout_);
+  } catch (const tf2::TransformException & error) {
+    return Result::failure(diagnostic::rejected(
+      "start", "frames.base '" + base_frame + "' in frames.map '" + map_frame +
+                 "' is not available within " + std::to_string(tf_timeout_.seconds()) +
+                 " s: " + diagnostic::flatten(error.what())));
+  }
+
+  const eltanin_ros_common::ConversionResult<eltanin_ros_common::Transform2DConversion> converted =
+    eltanin_ros_common::to_transform2d(transform);
+  if (!converted.ok()) {
+    return Result::failure(diagnostic::rejected("start", diagnostic::flatten(converted.error())));
+  }
+  if (!converted.value().deviation.within_tolerance && planarity_latch_.should_warn()) {
+    RCLCPP_WARN(
+      get_logger(), "the transform from '%s' to '%s' is out of plane by z %f m, roll %f, pitch %f",
+      base_frame.c_str(), map_frame.c_str(), converted.value().deviation.z,
+      converted.value().deviation.roll, converted.value().deviation.pitch);
+  }
+  return Result::success(converted.value().transform.to_pose());
 }
 
 void GlobalPathPlanner::on_costmap(eltanin_msgs::msg::Costmap::ConstSharedPtr msg)
