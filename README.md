@@ -139,9 +139,9 @@ creates it, so that nothing looks available before it is.
 | `eltanin_ros` | metapackage (`ament_package` only) | **implemented** |
 | `eltanin_vendor` | builds and installs `eltanin` via `ExternalProject` | **implemented** |
 | `eltanin_msgs` | msg / action definitions, interfaces only | **implemented** |
-| `eltanin_ros_common` | conversions, clock, watchdog, TF, parameter validation | **conversions, clock, watchdog and robot profile implemented**; TF helper waits for its first user |
+| `eltanin_ros_common` | conversions, clock, watchdog, TF, parameter validation | **conversions, clock, watchdog and robot profile implemented**; the TF helper stays inside `global_path_planner` until a second user appears |
 | `eltanin_costmap` | `global_costmap` and `local_map` nodes | **`global_costmap` implemented**; `local_map` in task 15 |
-| `eltanin_planner` | `global_path_planner` and `local_path_planner` nodes | not implemented (tasks 7, 17, 19) |
+| `eltanin_planner` | `global_path_planner` and `local_path_planner` nodes | **`global_path_planner` implemented**; `local_path_planner` in tasks 17 and 19 |
 | `eltanin_controller` | `path_follower` and `collision_predictor` nodes | not implemented (tasks 11, 12) |
 | `eltanin_navigator` | orchestrator | not implemented (tasks 13, 21) |
 | `eltanin_simulator` | `simple_simulator` node | not implemented (task 10) |
@@ -378,8 +378,9 @@ Recorded here rather than by editing `docs/design/eltaninnavyuros.md`, same as f
   layer and the three runtime pieces. `outcome_conversion.hpp` is not among them (tasks 20 and 21),
   and `src/diagnostic.hpp` is private and not installed.
 - §4.3 (D-25) lists the smoother weights among the `create()` calls that return `nullopt`. They are
-  not: `weight_data + 4 * weight_smooth < 2` is an `assert` in `planner::detail`, so it is not
-  checked at all under `RelWithDebInfo`. Task 7 validates it at the ROS boundary.
+  not: `weight_data + 4 * weight_smooth < 2` is enforced by `planner::detail`, which throws
+  `std::invalid_argument` from inside `smooth()`. `eltanin_planner` rejects them at startup instead,
+  where the report is one line and the caller has somewhere to put it.
 - §6.9 describes the package as `rclcpp`-free. That holds for the conversion layer target only.
 - §9 names `global_costmap_node.cpp`. There is no such file and no hand-written `main`:
   `rclcpp_components_register_node(... EXECUTOR MultiThreadedExecutor)` generates the executable, so
@@ -387,6 +388,152 @@ Recorded here rather than by editing `docs/design/eltaninnavyuros.md`, same as f
   A hand-written `main` would make only the single-process path return `1` instead of aborting.
 - §6.2 does not say what happens to a `/map` whose `header.frame_id` is not `frames.map`. It is
   rejected, because §10 makes detecting a frame mismatch a completion condition for stage S3.
+
+## `eltanin_planner`
+
+`global_path_planner` turns a goal into a path over the belief `global_costmap` publishes. It exists
+because navyu could not say why a plan failed (N-5): `eltanin::planner::plan()` collapses four
+distinct causes into one `nullopt`, and this node is where they are told apart again.
+
+### Why the action, and what its outcomes mean
+
+Planning is a request/response shape, but it is an **action** rather than a service: a search is
+0.147 s at `-O2` and 1.48 s at `-O0` on a 4000x4000 map, which is long enough for a cancellation to
+be worth having (§3.2).
+
+`~/compute_path_to_pose` (`eltanin_msgs/ComputePathToPose`) takes `goal`, `start` and `use_start`,
+and returns `path`, `outcome` and `message`. **Feedback is never sent** — the action's feedback is
+empty, because a single search has no intermediate progress to report. `handle_goal` never inspects
+the goal and always accepts: a rejection carries no result, so a rejected goal could not report an
+`outcome`, which is the whole point of the node. Every content-related failure is therefore an
+accepted goal that is aborted with a reason.
+
+`outcome` uses `eltanin_msgs/NavigationState`'s `OUTCOME_*` values and stays inside six of them:
+
+| `outcome` | When |
+|---|---|
+| `OUTCOME_REACHED` (0) | A path was produced. In a planner **it means "a path came out", not "the robot arrived"**; the value set has no other spelling for success. |
+| `OUTCOME_INPUT_STALE` (13) | No whole-area costmap has arrived yet. |
+| `OUTCOME_START_GOAL_FAILED` (2) | An empty or untransformable `frame_id`, an unusable pose, a start or goal outside the map, or a start with no free cell inside `start_search_radius_cells`. |
+| `OUTCOME_NO_PATH` (5) | The goal cell is not `Free`. **The goal is reported, never moved** — `find_nearest_traversable` is applied to the start only. |
+| `OUTCOME_PLAN_FAILED` (3) | The search itself found nothing, or returned no poses. |
+| `OUTCOME_CANCELED` (11) | The goal was canceled, or preempted by a newer one. There is no separate value for a preemption; `message` says which it was. |
+
+`message` is filled on success and on failure, and it is the same single line the node logs.
+
+### Telling the four causes apart costs a deliberate duplication
+
+`attempt_plan()` runs the checks `Planner::plan()` runs — `world_to_map`, `classify(goal)`,
+`find_nearest_traversable(start, r)` — **in the same order, with the same radius and the same model**,
+before calling `plan()` itself. That duplication is intentional: giving `eltanin`'s `plan()` a
+reason-carrying return value would change its API for the sake of the ROS boundary alone, and
+`eltanin` is not modified from here. The consequence is a coupling worth knowing about: **if
+`eltanin`'s `plan()` ever changes its checks, `attempt_plan()` has to follow**, or a real search
+failure will be reported as one of the endpoint failures. `test_goal_validation.cpp` pins each
+boundary, and the smoothing step is deliberately left outside `attempt_plan()` so that a
+cancellation can be observed between the search and the smoother.
+
+### Interruption is answered at four points, not during the search
+
+A search cannot be interrupted, so a cancel or a preemption is observed only at four boundaries:
+after acceptance, after the endpoints are resolved, after the search, and after the smoother. **A
+cancel is therefore answered at worst one whole search late** — 0.147 s at `-O2`, 1.48 s at `-O0`.
+A newer goal always wins: the running goal is aborted with `OUTCOME_CANCELED`, and a goal still
+waiting is displaced the same way, since only one plan runs at a time and there is no queue. Planning
+runs on a single worker thread rather than in the executor, so "at most one plan at a time" is a
+property of this code and not of `std::thread::hardware_concurrency()`.
+
+### Topics
+
+| Topic | Type | QoS | Note |
+|---|---|---|---|
+| `global_costmap/global_costmap` (in) | `eltanin_msgs/Costmap` | `KeepLast(1)`, reliable, `transient_local` | Replaces the belief. Relative name; the launch file remaps it. |
+| `global_costmap/global_costmap_updates` (in) | `eltanin_msgs/CostmapUpdate` | `KeepLast(1)`, reliable, volatile | Applied to the belief. |
+| `~/global_path` (out) | `nav_msgs/Path` | `KeepLast(1)`, reliable, volatile | Smoothed. Published before `succeed()`, so a successful result always has its path on the topic too. |
+| `~/global_path_raw` (out) | `nav_msgs/Path` | same | Unsmoothed; **the publisher only exists when `publish_raw_path` is set**. |
+
+Neither path topic is `transient_local`: a late subscriber would otherwise be handed, as the newest
+thing available, the path of a goal that was abandoned long ago. The authoritative hand-over is the
+action result; the topics are for visualization and for consumers that follow the latest.
+
+**Applying the patch is redundant today** and is implemented anyway. `global_costmap` always sends a
+whole area under the same stamp as its patch, so dropping every patch would give the same belief. It
+is here so that reducing how often the whole area is published — the open question U-P6-1, and task
+24 — needs no change in this node. A patch that is not strictly newer than the held costmap is
+dropped, which is what keeps the same-stamp pair from being applied twice.
+
+There is no staleness deadline on the costmap. `global_costmap` publishes on `/map` and on `~/update`
+only, never from a timer, so "nothing arrived recently" is the normal state of a standing robot; the
+node only asks whether one ever arrived.
+
+### The goal is not trusted
+
+navyu assumed every goal was already in the map frame (§2.4-2). Here `header.frame_id` is checked:
+empty is a rejection rather than an assumption, a frame equal to `frames.map` skips tf entirely, and
+anything else is transformed or rejected. The failing line names both frames, the stamp it looked
+up, and the timeout it waited — because that is the information needed to fix it. **The requested
+`orientation` is not discarded**: `plan()` puts `goal.yaw` on the last pose and the smoother leaves
+the last pose's yaw alone, so the yaw that was asked for is the yaw that comes back.
+
+### Parameters and startup
+
+| Key | Default | From |
+|---|---|---|
+| `start_search_radius_cells` | `8` | `eltanin::planner::AStarParams` |
+| `weight_data` | `0.5` | `eltanin::planner::SmootherParams` |
+| `weight_smooth` | `0.3` | same |
+| `smoother_tolerance` | `1e-4` | same (`tolerance`) |
+| `smoother_max_iterations` | `100` | same |
+| `publish_raw_path` | `false` | design §6.3 |
+| `unknown_is_free` | `false` | the second argument of `CostTraversabilityModel` |
+| `tf_lookup_timeout` | `0.1` | this node |
+
+`PlannerParameters` holds `AStarParams` and `SmootherParams` by value rather than copying their
+numbers, so the defaults above cannot drift from `eltanin`'s; `test_planner_parameters.cpp` pins them
+so that a change on the `eltanin` side is noticed rather than absorbed. As in `eltanin_costmap`, all
+eight are read once in the constructor and never again, and a value the node cannot work with
+produces one `ERROR` line and a `std::runtime_error` from the constructor. Only the first violated
+condition is reported.
+
+`weight_data + 4 * weight_smooth < 2` is checked at startup even though `eltanin` checks it too.
+Breaking it makes the smoother diverge, and `eltanin`'s own report is a `std::invalid_argument`
+thrown from inside `smooth()` — that is, once per plan request, from the middle of the call stack,
+long after the misconfiguration could still be fixed. The same holds for a negative
+`start_search_radius_cells`, which `Planner`'s constructor throws on. Validating at startup turns
+both into one `ERROR` line and a node that does not come up, and it does not depend on how `eltanin`
+was built.
+
+`unknown_is_free` is declared here and not in `eltanin_costmap`, because this node builds the first
+`CostTraversabilityModel` in the stack. Its threshold comes from
+`profile_.inflation_cost_model().circumscribed_cost()`, the same expression `global_costmap` inflates
+with — so **both nodes have to be given the same `robot/*.yaml`**, or the boundary between `Free` and
+`Circumscribed` here will not match the inflation there.
+
+### Measured planning time
+
+On a 4000x4000 empty map at `-O2`, `attempt_plan()` from cell (10, 10) to cell (3990, 3990) takes
+**96 to 122 ms** over four runs and returns 3981 poses. That is in line with the 0.147 s `eltanin`
+records for its own worst case, and it is what the 0.147 s figure in the cancellation discussion
+above refers to. The measurement is `AttemptPlanTest.DISABLED_PlanScale`, kept disabled so CI never
+runs it at `-O0`:
+
+```bash
+./build/eltanin_planner/test_goal_validation \
+  --gtest_also_run_disabled_tests --gtest_filter=*PlanScale*
+```
+
+### Corrections to the design document
+
+- §9 names `global_path_planner_node.cpp`. There is no such file and no hand-written `main`, for the
+  same reason as `global_costmap_node.cpp` above.
+- §3.3 says tf lookups use a timeout of 0. `global_path_planner` deviates: `tf_lookup_timeout`
+  defaults to 0.1 s. The prohibition is about blocking inside a high-rate timer, and a plan is not
+  periodic work — failing a plan because tf is one cycle behind is not useful. **The periodic
+  consumers (tasks 11, 12, 15) keep a timeout of 0.** A consequence worth recording: under
+  `use_sim_time` the timeout only expires while the simulator's clock is running.
+- §6.3 calls the successful outcome "reached". In a planner it means a path was produced.
+- §6.3 does not say that the pre-checks must track `eltanin`'s `plan()`. They must, in order, radius
+  and model; see the duplication note above.
 
 ## Launch
 
@@ -462,7 +609,10 @@ below is therefore required at every build type, not just the default one.**
 input with a single error line naming the offending parameter (design §4.3).
 
 **Do not convert between `eltanin` types and messages inside a node.** Call
-`eltanin_ros_common`; if the conversion you need is missing, add it there. Cell copies in that
+`eltanin_ros_common`; if the conversion you need is missing, add it there —
+`apply_costmap_update()` is there because `global_path_planner` needed it, and it is the inverse of
+`to_costmap_update_msg()`: what one cuts out the other writes back, and a patch that fails any check
+leaves the map untouched rather than half applied. Cell copies in that
 package go through `GridMap::data()` in one pass, which is why no `operator()` appears in it: the
 row-major layout of `MapGeometry`, `OccupancyGrid` and `eltanin_msgs/Costmap` is identical, so no row
 flip or transpose is involved. (`eltanin::map_io::load_map` does flip rows, because PGM starts at the
