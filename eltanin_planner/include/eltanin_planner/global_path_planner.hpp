@@ -29,6 +29,7 @@
 #include <eltanin_msgs/msg/costmap_update.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <nav_msgs/msg/path.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
 
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
@@ -118,6 +119,8 @@ private:
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_publisher_;
   /// Only created when publish_raw_path is set; a topic nobody publishes is not created.
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr raw_path_publisher_;
+  /// Same rule, for publish_footprint_path: the footprint laid along the path that was published.
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr footprint_publisher_;
 
   /// One worker, so that "at most one plan runs" is a property of the code and not of the executor.
   std::thread worker_;

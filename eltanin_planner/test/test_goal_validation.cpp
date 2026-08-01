@@ -84,6 +84,7 @@ TEST(ToOutcomeTest, TellsTheFourCausesEltaninCollapsesIntoOneNulloptApart)
   EXPECT_EQ(to_outcome(PlanFailure::GoalOutsideMap), NavigationState::OUTCOME_START_GOAL_FAILED);
   EXPECT_EQ(to_outcome(PlanFailure::GoalNotFree), NavigationState::OUTCOME_NO_PATH);
   EXPECT_EQ(to_outcome(PlanFailure::StartNotRescuable), NavigationState::OUTCOME_START_GOAL_FAILED);
+  EXPECT_EQ(to_outcome(PlanFailure::StateSpaceTooLarge), NavigationState::OUTCOME_PLAN_FAILED);
   EXPECT_EQ(to_outcome(PlanFailure::SearchFailed), NavigationState::OUTCOME_PLAN_FAILED);
   EXPECT_EQ(to_outcome(PlanFailure::EmptyPath), NavigationState::OUTCOME_PLAN_FAILED);
 }
@@ -246,6 +247,92 @@ TEST(AttemptPlanTest, TheRequestedGoalYawSurvivesTheSearchAndTheSmoother)
     eltanin::planner::smooth(attempt.path, costmap, make_model(), parameters.smoother);
   ASSERT_FALSE(smoothed.empty());
   EXPECT_DOUBLE_EQ(smoothed[smoothed.size() - 1].yaw, goal_yaw);
+}
+
+PlannerParameters hybrid_parameters()
+{
+  PlannerParameters parameters;
+  parameters.planner_type = eltanin_planner::PlannerType::HybridAStar;
+  // A turning radius the 10x10 test map at 0.1 m can actually accommodate.
+  parameters.hybrid.minimum_turning_radius = 0.2;
+  return parameters;
+}
+
+TEST(AttemptPlanHybridTest, PlansAcrossAnEmptyMapAndKeepsTheGoalYaw)
+{
+  const eltanin::map::Costmap costmap = make_costmap(20, 20);
+  const double goal_yaw = 0.5;
+  const auto attempt = attempt_plan(
+    costmap, make_model(), at_cell(costmap, 3, 3), at_cell(costmap, 16, 16, goal_yaw),
+    hybrid_parameters());
+  ASSERT_TRUE(attempt.ok()) << attempt.message;
+  EXPECT_FALSE(attempt.path.empty());
+  EXPECT_TRUE(reports_one_line(attempt));
+  EXPECT_NE(attempt.message.find("hybrid_astar"), std::string::npos) << attempt.message;
+}
+
+TEST(AttemptPlanHybridTest, ClassifiesTheSameFailuresAsAStar)
+{
+  const eltanin::map::Costmap empty = make_costmap();
+  const eltanin::Pose2D outside{Eigen::Vector2d{12.3, 4.5}, 0.0};
+  const auto off_map =
+    attempt_plan(empty, make_model(), at_cell(empty, 1, 1), outside, hybrid_parameters());
+  EXPECT_EQ(off_map.failure, PlanFailure::GoalOutsideMap);
+
+  eltanin::map::Costmap blocked_goal = make_costmap();
+  ASSERT_TRUE(blocked_goal.set(8, 8, LETHAL_OBSTACLE));
+  const auto not_free = attempt_plan(
+    blocked_goal, make_model(), at_cell(blocked_goal, 1, 1), at_cell(blocked_goal, 8, 8),
+    hybrid_parameters());
+  EXPECT_EQ(not_free.failure, PlanFailure::GoalNotFree);
+  EXPECT_EQ(to_outcome(not_free.failure), NavigationState::OUTCOME_NO_PATH);
+
+  eltanin::map::Costmap split = make_costmap();
+  for (int my = 0; my < split.size_y(); ++my) {
+    ASSERT_TRUE(split.set(5, my, LETHAL_OBSTACLE));
+  }
+  const auto no_path = attempt_plan(
+    split, make_model(), at_cell(split, 1, 1), at_cell(split, 8, 8), hybrid_parameters());
+  EXPECT_EQ(no_path.failure, PlanFailure::SearchFailed);
+  EXPECT_EQ(to_outcome(no_path.failure), NavigationState::OUTCOME_PLAN_FAILED);
+  EXPECT_NE(no_path.message.find("hybrid_astar"), std::string::npos) << no_path.message;
+}
+
+TEST(AttemptPlanHybridTest, RefusesAStateSpaceItWouldHaveToAllocateWhole)
+{
+  const eltanin::map::Costmap costmap = make_costmap(200, 200);
+  PlannerParameters parameters = hybrid_parameters();
+  // 200 * 200 * 72 is 2880000 states; eltanin sizes three arrays from that before searching.
+  parameters.hybrid_max_states = 1000;
+  const auto attempt = attempt_plan(
+    costmap, make_model(), at_cell(costmap, 3, 3), at_cell(costmap, 190, 190), parameters);
+  EXPECT_EQ(attempt.failure, PlanFailure::StateSpaceTooLarge);
+  EXPECT_EQ(to_outcome(attempt.failure), NavigationState::OUTCOME_PLAN_FAILED);
+  EXPECT_TRUE(reports_one_line(attempt));
+  EXPECT_NE(attempt.message.find("hybrid.max_states"), std::string::npos) << attempt.message;
+}
+
+TEST(AttemptPlanHybridTest, LeavesAStarAloneWhateverTheStateSpaceWouldBe)
+{
+  const eltanin::map::Costmap costmap = make_costmap(200, 200);
+  PlannerParameters parameters;
+  parameters.hybrid_max_states = 1;
+  const auto attempt = attempt_plan(
+    costmap, make_model(), at_cell(costmap, 3, 3), at_cell(costmap, 190, 190), parameters);
+  EXPECT_TRUE(attempt.ok()) << attempt.message;
+}
+
+TEST(AttemptPlanHybridTest, UsesItsOwnStartSearchRadius)
+{
+  eltanin::map::Costmap costmap = make_costmap();
+  ASSERT_TRUE(costmap.set(2, 2, LETHAL_OBSTACLE));
+  PlannerParameters parameters = hybrid_parameters();
+  parameters.hybrid.start_search_radius_cells = 0;
+  // The A* radius stays at its default, so a shared lookup would rescue the start by mistake.
+  ASSERT_EQ(parameters.astar.start_search_radius_cells, 8);
+  const auto attempt =
+    attempt_plan(costmap, make_model(), at_cell(costmap, 2, 2), at_cell(costmap, 8, 8), parameters);
+  EXPECT_EQ(attempt.failure, PlanFailure::StartNotRescuable);
 }
 
 /// AC-26: run by hand with --gtest_also_run_disabled_tests, never in CI where -O0 costs 1.48 s.

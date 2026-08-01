@@ -142,6 +142,90 @@ TEST(PlannerParametersTest, RejectsTheWeightsThatMakeTheSmootherDiverge)
   EXPECT_TRUE(validate(parameters).ok());
 }
 
+TEST(PlannerParametersTest, TheHybridDefaultsAreEltaninsOwnDefaults)
+{
+  const PlannerParameters parameters;
+  EXPECT_EQ(parameters.planner_type, eltanin_planner::PlannerType::AStar);
+  EXPECT_EQ(parameters.hybrid.start_search_radius_cells, 8);
+  EXPECT_EQ(parameters.hybrid.heading_bins, 72);
+  EXPECT_DOUBLE_EQ(parameters.hybrid.minimum_turning_radius, 0.4);
+  EXPECT_DOUBLE_EQ(parameters.hybrid.motion_step, 0.0);
+  EXPECT_DOUBLE_EQ(parameters.hybrid.collision_check_step, 0.0);
+  EXPECT_DOUBLE_EQ(parameters.hybrid.dubins_expansion_distance, 1.0);
+  EXPECT_DOUBLE_EQ(parameters.hybrid.steering_penalty, 0.05);
+  EXPECT_DOUBLE_EQ(parameters.hybrid.steering_change_penalty, 0.10);
+  EXPECT_EQ(parameters.hybrid.max_expansions, 0u);
+  EXPECT_FALSE(parameters.publish_footprint_path);
+  EXPECT_EQ(parameters.footprint_marker_stride, 10);
+  EXPECT_EQ(parameters.hybrid_max_states, 20000000u);
+}
+
+TEST(PlannerParametersTest, ThePlannerTypeNamesRoundTrip)
+{
+  using eltanin_planner::name_of;
+  using eltanin_planner::PlannerType;
+  using eltanin_planner::to_planner_type;
+  EXPECT_STREQ(name_of(PlannerType::AStar), "astar");
+  EXPECT_STREQ(name_of(PlannerType::HybridAStar), "hybrid_astar");
+  EXPECT_EQ(to_planner_type("astar"), PlannerType::AStar);
+  EXPECT_EQ(to_planner_type("hybrid_astar"), PlannerType::HybridAStar);
+  EXPECT_FALSE(to_planner_type("dubins").has_value());
+  EXPECT_FALSE(to_planner_type("").has_value());
+}
+
+TEST(PlannerParametersTest, RejectsTheHybridValuesEltaninWouldThrowOn)
+{
+  PlannerParameters few_bins;
+  few_bins.hybrid.heading_bins = 7;
+  EXPECT_TRUE(rejects(validate(few_bins).message(), "hybrid.heading_bins"));
+
+  PlannerParameters no_radius;
+  no_radius.hybrid.minimum_turning_radius = 0.0;
+  EXPECT_TRUE(rejects(validate(no_radius).message(), "hybrid.minimum_turning_radius"));
+
+  PlannerParameters negative_step;
+  negative_step.hybrid.motion_step = -0.1;
+  EXPECT_TRUE(rejects(validate(negative_step).message(), "hybrid.motion_step"));
+
+  PlannerParameters negative_check;
+  negative_check.hybrid.collision_check_step = -0.1;
+  EXPECT_TRUE(rejects(validate(negative_check).message(), "hybrid.collision_check_step"));
+
+  PlannerParameters no_dubins;
+  no_dubins.hybrid.dubins_expansion_distance = 0.0;
+  EXPECT_TRUE(rejects(validate(no_dubins).message(), "hybrid.dubins_expansion_distance"));
+
+  PlannerParameters negative_steering;
+  negative_steering.hybrid.steering_penalty = -0.1;
+  EXPECT_TRUE(rejects(validate(negative_steering).message(), "hybrid.steering_penalty"));
+
+  PlannerParameters negative_change;
+  negative_change.hybrid.steering_change_penalty = NOT_A_NUMBER;
+  EXPECT_TRUE(rejects(validate(negative_change).message(), "hybrid.steering_change_penalty"));
+}
+
+TEST(PlannerParametersTest, TheHybridValuesAreCheckedEvenWhileAStarIsSelected)
+{
+  PlannerParameters parameters;
+  ASSERT_EQ(parameters.planner_type, eltanin_planner::PlannerType::AStar);
+  parameters.hybrid.minimum_turning_radius = -1.0;
+  EXPECT_TRUE(rejects(validate(parameters).message(), "hybrid.minimum_turning_radius"));
+}
+
+TEST(PlannerParametersTest, RejectsAFootprintStrideBelowOne)
+{
+  PlannerParameters parameters;
+  parameters.footprint_marker_stride = 0;
+  EXPECT_TRUE(rejects(validate(parameters).message(), "footprint_marker_stride"));
+}
+
+TEST(PlannerParametersTest, RejectsAStateSpaceCeilingOfZero)
+{
+  PlannerParameters parameters;
+  parameters.hybrid_max_states = 0;
+  EXPECT_TRUE(rejects(validate(parameters).message(), "hybrid.max_states"));
+}
+
 TEST(PlannerParametersTest, ReportsOnlyTheFirstViolatedCondition)
 {
   PlannerParameters parameters;

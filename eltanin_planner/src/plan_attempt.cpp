@@ -17,11 +17,13 @@
 #include "src/diagnostic.hpp"
 
 #include <eltanin/planner/astar_planner.hpp>
+#include <eltanin/planner/hybrid_astar_planner.hpp>
 #include <eltanin/planner/traversable_search.hpp>
 
 #include <eltanin_msgs/msg/navigation_state.hpp>
 
 #include <cmath>
+#include <cstddef>
 #include <optional>
 #include <string>
 #include <utility>
@@ -74,6 +76,14 @@ PlanAttempt fail(PlanFailure failure, std::string message)
   return PlanAttempt{eltanin::Path{}, failure, std::move(message)};
 }
 
+/// Both searches rescue the start themselves, and the pre-check has to use the same radius.
+int search_radius(const PlannerParameters & parameters) noexcept
+{
+  return parameters.planner_type == PlannerType::HybridAStar
+           ? parameters.hybrid.start_search_radius_cells
+           : parameters.astar.start_search_radius_cells;
+}
+
 }  // namespace
 
 std::uint8_t to_outcome(PlanFailure failure) noexcept
@@ -88,6 +98,8 @@ std::uint8_t to_outcome(PlanFailure failure) noexcept
     case PlanFailure::GoalOutsideMap:
     case PlanFailure::StartNotRescuable:
       return NavigationState::OUTCOME_START_GOAL_FAILED;
+    case PlanFailure::StateSpaceTooLarge:
+      return NavigationState::OUTCOME_PLAN_FAILED;
     case PlanFailure::GoalNotFree:
       return NavigationState::OUTCOME_NO_PATH;
     case PlanFailure::SearchFailed:
@@ -138,7 +150,7 @@ PlanAttempt attempt_plan(
                                              ", not Free; the goal is reported, not moved"));
   }
 
-  const int radius = parameters.astar.start_search_radius_cells;
+  const int radius = search_radius(parameters);
   const std::optional<MapIndex> rescued =
     eltanin::planner::find_nearest_traversable(costmap, model, *start_cell, radius);
   if (!rescued.has_value()) {
@@ -149,14 +161,33 @@ PlanAttempt attempt_plan(
         "no Free cell within start_search_radius_cells " + std::to_string(radius)));
   }
 
+  if (parameters.planner_type == PlannerType::HybridAStar) {
+    const std::size_t states =
+      costmap.cell_count() * static_cast<std::size_t>(parameters.hybrid.heading_bins);
+    if (states > parameters.hybrid_max_states) {
+      return fail(
+        PlanFailure::StateSpaceTooLarge,
+        diagnostic::rejected(
+          "the hybrid_astar state space",
+          std::to_string(costmap.cell_count()) + " cells x " +
+            std::to_string(parameters.hybrid.heading_bins) + " heading bins is " +
+            std::to_string(states) + " states, above hybrid.max_states " +
+            std::to_string(parameters.hybrid_max_states) +
+            "; the search allocates all of them before it expands anything"));
+    }
+  }
+
   std::optional<eltanin::Path> path =
-    eltanin::planner::plan(costmap, model, start, goal, parameters.astar);
+    parameters.planner_type == PlannerType::HybridAStar
+      ? eltanin::planner::plan_hybrid_astar(costmap, model, start, goal, parameters.hybrid)
+      : eltanin::planner::plan(costmap, model, start, goal, parameters.astar);
   if (!path.has_value()) {
     return fail(
       PlanFailure::SearchFailed,
       diagnostic::line(
         "no path from " + describe_cell("start", *start_cell) + " to " +
-        describe_cell("goal", *goal_cell) + " on the " + describe_map(geometry)));
+        describe_cell("goal", *goal_cell) + " with " + name_of(parameters.planner_type) +
+        " on the " + describe_map(geometry)));
   }
   if (path->empty()) {
     return fail(
@@ -167,8 +198,8 @@ PlanAttempt attempt_plan(
   }
 
   const std::string message = diagnostic::line(
-    "planned " + std::to_string(path->size()) + " poses, " +
-    std::to_string(eltanin::path_length(*path)) + " m");
+    std::string(name_of(parameters.planner_type)) + " planned " + std::to_string(path->size()) +
+    " poses, " + std::to_string(eltanin::path_length(*path)) + " m");
   return PlanAttempt{std::move(*path), PlanFailure::None, message};
 }
 

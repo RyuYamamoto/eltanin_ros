@@ -20,6 +20,7 @@
 #include <eltanin/planner/path_smoother.hpp>
 #include <eltanin_ros_common/geometry_conversion.hpp>
 #include <eltanin_ros_common/map_conversion.hpp>
+#include <eltanin_ros_common/marker_conversion.hpp>
 #include <eltanin_ros_common/path_conversion.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <tf2/exceptions.hpp>
@@ -29,10 +30,12 @@
 #include <tf2_ros/create_timer_ros.h>
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -74,13 +77,59 @@ int require_int(rclcpp::Node & node, const char * key, int fallback)
   return static_cast<int>(value);
 }
 
+/// max_expansions is a size_t, so the sign has to be refused before the cast, not after it.
+int require_non_negative_int(rclcpp::Node & node, const char * key, int fallback)
+{
+  const int value = require_int(node, key, fallback);
+  if (value < 0) {
+    refuse_to_start(
+      node,
+      diagnostic::rejected(key, "is " + std::to_string(value) + ", which must not be negative"));
+  }
+  return value;
+}
+
+PlannerType require_planner_type(rclcpp::Node & node, PlannerType fallback)
+{
+  const auto name = require_parameter<std::string>(node, KEY_PLANNER_TYPE, name_of(fallback));
+  const std::optional<PlannerType> type = to_planner_type(name);
+  if (!type.has_value()) {
+    refuse_to_start(
+      node, diagnostic::rejected(
+              KEY_PLANNER_TYPE, "is '" + name + "', not '" + name_of(PlannerType::AStar) +
+                                  "' or '" + name_of(PlannerType::HybridAStar) + "'"));
+  }
+  return *type;
+}
+
 /// Read once at construction and never again; the defaults come from eltanin, not from literals.
 PlannerParameters require_parameters(rclcpp::Node & node)
 {
   const PlannerParameters defaults;
   PlannerParameters parameters;
+  parameters.planner_type = require_planner_type(node, defaults.planner_type);
+  // One key for a radius both searches take, so the two cannot be given different values.
   parameters.astar.start_search_radius_cells =
     require_int(node, KEY_START_SEARCH_RADIUS_CELLS, defaults.astar.start_search_radius_cells);
+  parameters.hybrid.start_search_radius_cells = parameters.astar.start_search_radius_cells;
+  parameters.hybrid.heading_bins =
+    require_int(node, KEY_HEADING_BINS, defaults.hybrid.heading_bins);
+  parameters.hybrid.minimum_turning_radius =
+    require_parameter(node, KEY_MINIMUM_TURNING_RADIUS, defaults.hybrid.minimum_turning_radius);
+  parameters.hybrid.motion_step =
+    require_parameter(node, KEY_MOTION_STEP, defaults.hybrid.motion_step);
+  parameters.hybrid.collision_check_step =
+    require_parameter(node, KEY_COLLISION_CHECK_STEP, defaults.hybrid.collision_check_step);
+  parameters.hybrid.dubins_expansion_distance = require_parameter(
+    node, KEY_DUBINS_EXPANSION_DISTANCE, defaults.hybrid.dubins_expansion_distance);
+  parameters.hybrid.steering_penalty =
+    require_parameter(node, KEY_STEERING_PENALTY, defaults.hybrid.steering_penalty);
+  parameters.hybrid.steering_change_penalty =
+    require_parameter(node, KEY_STEERING_CHANGE_PENALTY, defaults.hybrid.steering_change_penalty);
+  parameters.hybrid.max_expansions = static_cast<std::size_t>(require_non_negative_int(
+    node, KEY_MAX_EXPANSIONS, static_cast<int>(defaults.hybrid.max_expansions)));
+  parameters.hybrid_max_states = static_cast<std::size_t>(
+    require_non_negative_int(node, KEY_MAX_STATES, static_cast<int>(defaults.hybrid_max_states)));
   parameters.smoother.weight_data =
     require_parameter(node, KEY_WEIGHT_DATA, defaults.smoother.weight_data);
   parameters.smoother.weight_smooth =
@@ -95,6 +144,10 @@ PlannerParameters require_parameters(rclcpp::Node & node)
     require_parameter(node, KEY_UNKNOWN_IS_FREE, defaults.unknown_is_free);
   parameters.tf_lookup_timeout =
     require_parameter(node, KEY_TF_LOOKUP_TIMEOUT, defaults.tf_lookup_timeout);
+  parameters.publish_footprint_path =
+    require_parameter(node, KEY_PUBLISH_FOOTPRINT_PATH, defaults.publish_footprint_path);
+  parameters.footprint_marker_stride =
+    require_int(node, KEY_FOOTPRINT_MARKER_STRIDE, defaults.footprint_marker_stride);
 
   const eltanin_ros_common::ConversionStatus status = validate(parameters);
   if (!status.ok()) {
@@ -181,6 +234,10 @@ GlobalPathPlanner::GlobalPathPlanner(const rclcpp::NodeOptions & options)
   if (parameters_.publish_raw_path) {
     raw_path_publisher_ = create_publisher<nav_msgs::msg::Path>("~/global_path_raw", path_qos());
   }
+  if (parameters_.publish_footprint_path) {
+    footprint_publisher_ =
+      create_publisher<visualization_msgs::msg::MarkerArray>("~/footprint_path", path_qos());
+  }
 
   action_server_ = rclcpp_action::create_server<Action>(
     this, "~/compute_path_to_pose",
@@ -262,7 +319,15 @@ void GlobalPathPlanner::run()
       preempt_active_ = false;
     }
 
-    execute(handle);
+    // An uncaught throw on this thread would end the process rather than the one goal it belongs
+    // to.
+    try {
+      execute(handle);
+    } catch (const std::exception & error) {
+      abort_with(
+        handle, eltanin_msgs::msg::NavigationState::OUTCOME_PLAN_FAILED,
+        diagnostic::line(std::string("the plan threw: ") + error.what()));
+    }
     {
       const std::lock_guard<std::mutex> lock(work_mutex_);
       active_.reset();
@@ -360,8 +425,11 @@ void GlobalPathPlanner::execute(const std::shared_ptr<GoalHandle> & handle)
     return;
   }
 
+  // Smoothing a Hybrid A* path would pull its points off the curvature it was built to respect.
   const eltanin::Path smoothed =
-    eltanin::planner::smooth(attempt.path, *costmap, model_, parameters_.smoother);
+    parameters_.planner_type == PlannerType::HybridAStar
+      ? attempt.path
+      : eltanin::planner::smooth(attempt.path, *costmap, model_, parameters_.smoother);
   const auto smoothing_finished = std::chrono::steady_clock::now();
 
   if (interrupted(handle)) {
@@ -390,12 +458,23 @@ void GlobalPathPlanner::execute(const std::shared_ptr<GoalHandle> & handle)
   // Published before succeed() so the topic already carries the path the result announces (P-6).
   path_publisher_->publish(path_msg.value());
 
+  if (footprint_publisher_) {
+    const eltanin_ros_common::ConversionResult<visualization_msgs::msg::MarkerArray> markers =
+      eltanin_ros_common::to_footprint_markers(
+        smoothed, profile_.footprint(), parameters_.footprint_marker_stride, map_frame, stamp);
+    if (markers.ok()) {
+      footprint_publisher_->publish(markers.value());
+    } else {
+      RCLCPP_WARN(get_logger(), "%s", markers.error().c_str());
+    }
+  }
+
   auto result = std::make_shared<Action::Result>();
   result->path = path_msg.value();
   result->outcome = NavigationState::OUTCOME_REACHED;
   result->message = diagnostic::line(
-    "planned " + std::to_string(smoothed.size()) + " poses, " +
-    std::to_string(eltanin::path_length(smoothed)) + " m, searched in " +
+    std::string(name_of(parameters_.planner_type)) + " planned " + std::to_string(smoothed.size()) +
+    " poses, " + std::to_string(eltanin::path_length(smoothed)) + " m, searched in " +
     milliseconds_between(search_started, search_finished) + " ms, smoothed in " +
     milliseconds_between(search_finished, smoothing_finished) + " ms");
   handle->succeed(result);

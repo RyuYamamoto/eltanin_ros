@@ -12,6 +12,7 @@ find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(tf2 REQUIRED)
+find_package(visualization_msgs REQUIRED)
 
 # This is the first package where ELTANIN_ROS_ENABLE_WERROR has anything to act on: the other three
 # compile nothing of their own. The flags go on targets with target_compile_options(PRIVATE) rather
@@ -27,6 +28,7 @@ add_library(${PROJECT_NAME} SHARED
   src/cost_conversion.cpp
   src/geometry_conversion.cpp
   src/map_conversion.cpp
+  src/marker_conversion.cpp
   src/path_conversion.cpp
   src/scan_conversion.cpp)
 target_include_directories(${PROJECT_NAME} PUBLIC
@@ -47,6 +49,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
   ${nav_msgs_TARGETS}
   ${sensor_msgs_TARGETS}
   ${std_msgs_TARGETS}
+  ${visualization_msgs_TARGETS}
   tf2::tf2)
 target_compile_options(${PROJECT_NAME} PRIVATE ${warning_options})
 
@@ -82,7 +85,8 @@ ament_export_dependencies(
   rclcpp
   sensor_msgs
   std_msgs
-  tf2)
+  tf2
+  visualization_msgs)
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
@@ -92,6 +96,7 @@ if(BUILD_TESTING)
       test_cost_conversion
       test_geometry_conversion
       test_map_conversion
+      test_marker_conversion
       test_path_conversion
       test_scan_conversion
       test_outcome_constants)

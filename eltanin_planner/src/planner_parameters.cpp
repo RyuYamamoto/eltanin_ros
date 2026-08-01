@@ -43,16 +43,89 @@ ConversionStatus require_finite_non_negative(const char * key, double value)
   return ConversionStatus::success();
 }
 
-ConversionStatus require_non_negative(const char * key, int value)
+ConversionStatus require_finite_positive(const char * key, double value)
 {
-  if (value < 0) {
+  if (!std::isfinite(value)) {
     return ConversionStatus::failure(
-      diagnostic::rejected(key, "is " + std::to_string(value) + ", which must not be negative"));
+      diagnostic::rejected(key, "is " + std::to_string(value) + ", which must be finite"));
+  }
+  if (value <= 0.0) {
+    return ConversionStatus::failure(
+      diagnostic::rejected(key, "is " + std::to_string(value) + ", which must be greater than 0"));
   }
   return ConversionStatus::success();
 }
 
+ConversionStatus require_at_least(const char * key, int value, int lowest)
+{
+  if (value < lowest) {
+    return ConversionStatus::failure(diagnostic::rejected(
+      key, "is " + std::to_string(value) + ", which must be at least " + std::to_string(lowest)));
+  }
+  return ConversionStatus::success();
+}
+
+ConversionStatus require_non_negative(const char * key, int value)
+{
+  return require_at_least(key, value, 0);
+}
+
+/// The conditions HybridAStarPlanner's constructor throws on, checked where they can be reported.
+ConversionStatus validate_hybrid(const eltanin::planner::HybridAStarParams & hybrid)
+{
+  const ConversionStatus radius_cells =
+    require_non_negative(KEY_START_SEARCH_RADIUS_CELLS, hybrid.start_search_radius_cells);
+  if (!radius_cells.ok()) {
+    return radius_cells;
+  }
+  const ConversionStatus bins = require_at_least(KEY_HEADING_BINS, hybrid.heading_bins, 8);
+  if (!bins.ok()) {
+    return bins;
+  }
+  const ConversionStatus radius =
+    require_finite_positive(KEY_MINIMUM_TURNING_RADIUS, hybrid.minimum_turning_radius);
+  if (!radius.ok()) {
+    return radius;
+  }
+  const ConversionStatus motion = require_finite_non_negative(KEY_MOTION_STEP, hybrid.motion_step);
+  if (!motion.ok()) {
+    return motion;
+  }
+  const ConversionStatus check =
+    require_finite_non_negative(KEY_COLLISION_CHECK_STEP, hybrid.collision_check_step);
+  if (!check.ok()) {
+    return check;
+  }
+  const ConversionStatus dubins =
+    require_finite_positive(KEY_DUBINS_EXPANSION_DISTANCE, hybrid.dubins_expansion_distance);
+  if (!dubins.ok()) {
+    return dubins;
+  }
+  const ConversionStatus steering =
+    require_finite_non_negative(KEY_STEERING_PENALTY, hybrid.steering_penalty);
+  if (!steering.ok()) {
+    return steering;
+  }
+  return require_finite_non_negative(KEY_STEERING_CHANGE_PENALTY, hybrid.steering_change_penalty);
+}
+
 }  // namespace
+
+const char * name_of(PlannerType type) noexcept
+{
+  return type == PlannerType::HybridAStar ? "hybrid_astar" : "astar";
+}
+
+std::optional<PlannerType> to_planner_type(std::string_view name) noexcept
+{
+  if (name == "astar") {
+    return PlannerType::AStar;
+  }
+  if (name == "hybrid_astar") {
+    return PlannerType::HybridAStar;
+  }
+  return std::nullopt;
+}
 
 ConversionStatus validate(const PlannerParameters & parameters)
 {
@@ -96,7 +169,17 @@ ConversionStatus validate(const PlannerParameters & parameters)
         ", which must be below " + std::to_string(SMOOTHER_CONVERGENCE_BOUND) +
         " or the smoother diverges"));
   }
-  return ConversionStatus::success();
+
+  const ConversionStatus stride =
+    require_at_least(KEY_FOOTPRINT_MARKER_STRIDE, parameters.footprint_marker_stride, 1);
+  if (!stride.ok()) {
+    return stride;
+  }
+  if (parameters.hybrid_max_states == 0) {
+    return ConversionStatus::failure(
+      diagnostic::rejected(KEY_MAX_STATES, "is 0, which allows no state at all"));
+  }
+  return validate_hybrid(parameters.hybrid);
 }
 
 }  // namespace eltanin_planner

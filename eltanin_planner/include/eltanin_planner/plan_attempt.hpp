@@ -38,6 +38,8 @@ enum class PlanFailure : std::uint8_t {
   /// Reported, never moved: the goal is what the caller asked for (astar_planner's own contract).
   GoalNotFree,
   StartNotRescuable,
+  /// eltanin sizes its arrays from cells * heading_bins before it expands anything.
+  StateSpaceTooLarge,
   SearchFailed,
   EmptyPath
 };

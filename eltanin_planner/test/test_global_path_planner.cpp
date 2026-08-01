@@ -24,6 +24,7 @@
 #include <eltanin_msgs/msg/costmap_update.hpp>
 #include <eltanin_msgs/msg/navigation_state.hpp>
 #include <nav_msgs/msg/path.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
 
 #include <gtest/gtest.h>
 #include <tf2_ros/static_transform_broadcaster.h>
@@ -615,6 +616,71 @@ TEST_F(GlobalPathPlannerFixture, ACanceledGoalIsCanceledAndPublishesNoPath)
   EXPECT_TRUE(is_one_line(result->message));
   EXPECT_TRUE(result->path.poses.empty());
   EXPECT_EQ(last_path_, nullptr);
+}
+
+TEST_F(GlobalPathPlannerFixture, RefusesToStartOnAPlannerTypeNobodyDefined)
+{
+  try {
+    start({rclcpp::Parameter("planner_type", "dubins")});
+    FAIL() << "the node started with an unknown planner_type";
+  } catch (const std::runtime_error & error) {
+    const std::string line = error.what();
+    EXPECT_NE(line.find("planner_type"), std::string::npos) << line;
+    EXPECT_NE(line.find("hybrid_astar"), std::string::npos) << line;
+    EXPECT_TRUE(is_one_line(line));
+  }
+}
+
+TEST_F(GlobalPathPlannerFixture, RefusesToStartOnHybridValuesEltaninWouldThrowOn)
+{
+  EXPECT_THROW(start({rclcpp::Parameter("hybrid.heading_bins", 4)}), std::runtime_error);
+}
+
+TEST_F(GlobalPathPlannerFixture, HybridAStarPlansAndIsNamedInTheResult)
+{
+  start(
+    {rclcpp::Parameter("planner_type", "hybrid_astar"),
+     rclcpp::Parameter("hybrid.minimum_turning_radius", 0.2)});
+  ASSERT_TRUE(publish_costmap(make_costmap_msg(1)));
+  last_path_ = nullptr;
+
+  const auto result = plan(make_goal());
+  ASSERT_NE(result, nullptr);
+  ASSERT_EQ(result->outcome, NavigationState::OUTCOME_REACHED) << result->message;
+  EXPECT_NE(result->message.find("hybrid_astar"), std::string::npos) << result->message;
+  ASSERT_TRUE(wait_until("the path is published", [this]() { return last_path_ != nullptr; }));
+  EXPECT_FALSE(last_path_->poses.empty());
+}
+
+TEST_F(GlobalPathPlannerFixture, NoFootprintPublisherExistsUnlessItIsAskedFor)
+{
+  start();
+  ASSERT_TRUE(publish_costmap(make_costmap_msg(1)));
+  ASSERT_EQ(plan(make_goal())->outcome, NavigationState::OUTCOME_REACHED);
+  EXPECT_EQ(helper_->count_publishers("/global_path_planner/footprint_path"), 0u);
+}
+
+TEST_F(GlobalPathPlannerFixture, TheFootprintIsLaidAlongThePathWhenItIsAskedFor)
+{
+  start(
+    {rclcpp::Parameter("publish_footprint_path", true),
+     rclcpp::Parameter("footprint_marker_stride", 2)});
+  visualization_msgs::msg::MarkerArray::ConstSharedPtr markers;
+  const auto subscription = helper_->create_subscription<visualization_msgs::msg::MarkerArray>(
+    "/global_path_planner/footprint_path", rclcpp::QoS(rclcpp::KeepLast(1)).reliable(),
+    [&markers](visualization_msgs::msg::MarkerArray::ConstSharedPtr msg) { markers = msg; });
+
+  ASSERT_TRUE(publish_costmap(make_costmap_msg(1)));
+  ASSERT_EQ(plan(make_goal())->outcome, NavigationState::OUTCOME_REACHED);
+  ASSERT_TRUE(wait_until("the footprints arrive", [&markers]() { return markers != nullptr; }));
+
+  ASSERT_GE(markers->markers.size(), 2u);
+  EXPECT_EQ(markers->markers.front().action, visualization_msgs::msg::Marker::DELETEALL);
+  const auto & outline = markers->markers[1];
+  EXPECT_EQ(outline.type, visualization_msgs::msg::Marker::LINE_STRIP);
+  EXPECT_EQ(outline.header.frame_id, "map");
+  // The default footprint has four vertices and the strip repeats the first to close it.
+  EXPECT_EQ(outline.points.size(), 5u);
 }
 
 /// AC-20 is not directly observable, so the stand-in is a costmap that lands between two plans.
