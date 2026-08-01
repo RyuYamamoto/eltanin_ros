@@ -16,6 +16,7 @@
   <exec_depend>eltanin_msgs</exec_depend>
   <exec_depend>eltanin_ros_common</exec_depend>
   <exec_depend>eltanin_costmap</exec_depend>
+  <exec_depend>eltanin_planner</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
