@@ -52,6 +52,16 @@ std::string reject(const std::string & context, const std::string & violation)
   return diagnostic::rejected(context, violation);
 }
 
+/// A received patch names its rectangle instead of a resolution, which it does not carry.
+std::string describe_patch(
+  std::string_view frame_id, std::uint32_t x, std::uint32_t y, std::uint32_t width,
+  std::uint32_t height)
+{
+  return "eltanin_msgs/CostmapUpdate (frame_id='" + std::string(frame_id) + "', " +
+         std::to_string(width) + "x" + std::to_string(height) + " at (" + std::to_string(x) + ", " +
+         std::to_string(y) + "))";
+}
+
 std::string tolerance_suffix(double value, double tolerance)
 {
   return std::to_string(value) + " rad, tolerance is " + std::to_string(tolerance) + " rad";
@@ -296,6 +306,53 @@ ConversionResult<eltanin_msgs::msg::CostmapUpdate> to_costmap_update_msg(
       msg.data.begin() + static_cast<std::ptrdiff_t>(row * width));
   }
   return Result::success(std::move(msg));
+}
+
+ConversionStatus apply_costmap_update(
+  const eltanin_msgs::msg::CostmapUpdate & msg, eltanin::map::Costmap & costmap)
+{
+  const std::string context =
+    describe_patch(msg.header.frame_id, msg.x, msg.y, msg.width, msg.height);
+  const ConversionStatus costmap_status = check_costmap(context, costmap);
+  if (!costmap_status.ok()) {
+    return costmap_status;
+  }
+  if (msg.width == 0 || msg.height == 0) {
+    return ConversionStatus::failure(reject(context, "width and height must both be non-zero"));
+  }
+  const std::size_t cells =
+    static_cast<std::size_t>(msg.width) * static_cast<std::size_t>(msg.height);
+  if (msg.data.size() != cells) {
+    return ConversionStatus::failure(reject(
+      context, "data has " + std::to_string(msg.data.size()) + " entries but the size implies " +
+                 std::to_string(cells)));
+  }
+
+  // x and width are uint32, so the last cell is computed in 64 bits or the sum wraps in an int.
+  const std::int64_t max_x = static_cast<std::int64_t>(msg.x) + msg.width - 1;
+  const std::int64_t max_y = static_cast<std::int64_t>(msg.y) + msg.height - 1;
+  constexpr auto int_max = static_cast<std::int64_t>(std::numeric_limits<int>::max());
+  if (max_x > int_max || max_y > int_max) {
+    return ConversionStatus::failure(reject(
+      context, "the last cell (" + std::to_string(max_x) + ", " + std::to_string(max_y) +
+                 ") must fit in an int"));
+  }
+  const eltanin::map::CellRect rect{
+    static_cast<int>(msg.x), static_cast<int>(msg.y), static_cast<int>(max_x),
+    static_cast<int>(max_y)};
+  const ConversionStatus rect_status = check_rect(context, rect, costmap.geometry());
+  if (!rect_status.ok()) {
+    return rect_status;
+  }
+
+  // Every check is behind us, so the first write is also the one that cannot be half done.
+  std::size_t at = 0;
+  for (int my = rect.min_y; my <= rect.max_y; ++my) {
+    for (int mx = rect.min_x; mx <= rect.max_x; ++mx) {
+      costmap.set(mx, my, msg.data[at++]);
+    }
+  }
+  return ConversionStatus::success();
 }
 
 ConversionResult<nav_msgs::msg::OccupancyGrid> to_occupancy_grid(

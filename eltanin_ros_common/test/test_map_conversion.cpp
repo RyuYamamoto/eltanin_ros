@@ -38,6 +38,7 @@ using eltanin::map::FREE_SPACE;
 using eltanin::map::INSCRIBED_INFLATED_OBSTACLE;
 using eltanin::map::LETHAL_OBSTACLE;
 using eltanin::map::NO_INFORMATION;
+using eltanin_ros_common::apply_costmap_update;
 using eltanin_ros_common::MapLimits;
 using eltanin_ros_common::OccupancyThresholds;
 using eltanin_ros_common::to_costmap;
@@ -547,6 +548,129 @@ TEST(ToCostmapUpdateMsgTest, CarriesTheReservedValuesTheVisualizationTopicCannot
     to_costmap_update_msg(make_costmap(4, 1, raw), CellRect{0, 0, 3, 0}, "map", make_stamp(0, 0));
   ASSERT_TRUE(msg.ok()) << msg.error();
   EXPECT_EQ(msg.value().data, raw);
+}
+
+/// A patch built by hand, so a rejection can be tested without going through the producing side.
+eltanin_msgs::msg::CostmapUpdate make_update_msg(
+  std::uint32_t x, std::uint32_t y, std::uint32_t width, std::uint32_t height,
+  const std::vector<std::uint8_t> & data)
+{
+  eltanin_msgs::msg::CostmapUpdate msg;
+  msg.header.frame_id = "map";
+  msg.x = x;
+  msg.y = y;
+  msg.width = width;
+  msg.height = height;
+  msg.data = data;
+  return msg;
+}
+
+TEST(ApplyCostmapUpdateTest, WritesTheRectangleAndNothingElse)
+{
+  eltanin::map::Costmap costmap = make_numbered_costmap();
+  const eltanin::map::Costmap before = costmap;
+  const auto status = apply_costmap_update(make_update_msg(1, 1, 2, 2, {90, 91, 92, 93}), costmap);
+  ASSERT_TRUE(status.ok()) << status.message();
+
+  EXPECT_EQ(costmap.get(1, 1), 90);
+  EXPECT_EQ(costmap.get(2, 1), 91);
+  EXPECT_EQ(costmap.get(1, 2), 92);
+  EXPECT_EQ(costmap.get(2, 2), 93);
+  for (int my = 0; my < costmap.size_y(); ++my) {
+    for (int mx = 0; mx < costmap.size_x(); ++mx) {
+      const bool inside = mx >= 1 && mx <= 2 && my >= 1 && my <= 2;
+      if (!inside) {
+        EXPECT_EQ(costmap.get(mx, my), before.get(mx, my)) << "at (" << mx << ", " << my << ")";
+      }
+    }
+  }
+}
+
+TEST(ApplyCostmapUpdateTest, KeepsTheRowOrderSoAPatchIsNotTransposed)
+{
+  eltanin::map::Costmap costmap = make_numbered_costmap();
+  const auto status = apply_costmap_update(make_update_msg(1, 0, 2, 2, {90, 91, 92, 93}), costmap);
+  ASSERT_TRUE(status.ok()) << status.message();
+  EXPECT_EQ(costmap.get(1, 0), 90);
+  EXPECT_EQ(costmap.get(2, 0), 91);
+  EXPECT_EQ(costmap.get(1, 1), 92);
+  EXPECT_EQ(costmap.get(2, 1), 93);
+}
+
+TEST(ApplyCostmapUpdateTest, CarriesTheReservedValues)
+{
+  eltanin::map::Costmap costmap = make_costmap(4, 1, {0, 0, 0, 0});
+  const std::vector<std::uint8_t> raw{
+    FREE_SPACE, INSCRIBED_INFLATED_OBSTACLE, LETHAL_OBSTACLE, NO_INFORMATION};
+  const auto status = apply_costmap_update(make_update_msg(0, 0, 4, 1, raw), costmap);
+  ASSERT_TRUE(status.ok()) << status.message();
+  EXPECT_EQ(costmap.data(), raw);
+}
+
+TEST(ApplyCostmapUpdateTest, RejectsARectangleThatDoesNotFitTheMapWithoutWritingACell)
+{
+  eltanin::map::Costmap costmap = make_numbered_costmap();
+  const eltanin::map::Costmap before = costmap;
+  const auto status = apply_costmap_update(make_update_msg(3, 0, 2, 1, {90, 91}), costmap);
+  EXPECT_FALSE(status.ok());
+  EXPECT_TRUE(contains(status.message(), "does not fit a 4x3 map"));
+  EXPECT_TRUE(is_one_line(status.message()));
+  EXPECT_TRUE(names_the_package_once(status.message()));
+  EXPECT_EQ(costmap.data(), before.data());
+}
+
+TEST(ApplyCostmapUpdateTest, RejectsADataLengthThatDisagreesWithTheRectangle)
+{
+  eltanin::map::Costmap costmap = make_numbered_costmap();
+  const eltanin::map::Costmap before = costmap;
+  const auto status = apply_costmap_update(make_update_msg(0, 0, 2, 2, {90, 91, 92}), costmap);
+  EXPECT_FALSE(status.ok());
+  EXPECT_TRUE(contains(status.message(), "data has 3 entries but the size implies 4"));
+  EXPECT_TRUE(is_one_line(status.message()));
+  EXPECT_EQ(costmap.data(), before.data());
+}
+
+TEST(ApplyCostmapUpdateTest, RejectsAnEmptyRectangle)
+{
+  eltanin::map::Costmap costmap = make_numbered_costmap();
+  const auto no_width = apply_costmap_update(make_update_msg(0, 0, 0, 2, {}), costmap);
+  EXPECT_FALSE(no_width.ok());
+  EXPECT_TRUE(contains(no_width.message(), "width and height must both be non-zero"));
+
+  const auto no_height = apply_costmap_update(make_update_msg(0, 0, 2, 0, {}), costmap);
+  EXPECT_FALSE(no_height.ok());
+  EXPECT_EQ(costmap.data(), make_numbered_costmap().data());
+}
+
+TEST(ApplyCostmapUpdateTest, RejectsALastCellThatOverflowsAnInt)
+{
+  eltanin::map::Costmap costmap = make_numbered_costmap();
+  const auto status = apply_costmap_update(
+    make_update_msg(std::numeric_limits<std::uint32_t>::max(), 0, 2, 1, {90, 91}), costmap);
+  EXPECT_FALSE(status.ok());
+  EXPECT_TRUE(contains(status.message(), "must fit in an int"));
+  EXPECT_TRUE(is_one_line(status.message()));
+}
+
+TEST(ApplyCostmapUpdateTest, RejectsTheSameDegenerateMapsAsTheFullTopic)
+{
+  eltanin::map::Costmap no_geometry;
+  const auto status = apply_costmap_update(make_update_msg(0, 0, 1, 1, {90}), no_geometry);
+  EXPECT_FALSE(status.ok());
+  EXPECT_TRUE(contains(status.message(), "resolution"));
+}
+
+TEST(ApplyCostmapUpdateTest, ARoundTripThroughAPatchRestoresTheCells)
+{
+  const eltanin::map::Costmap source = make_numbered_costmap();
+  const CellRect rect{1, 0, 2, 2};
+  const auto msg = to_costmap_update_msg(source, rect, "map", make_stamp(0, 0));
+  ASSERT_TRUE(msg.ok()) << msg.error();
+
+  eltanin::map::Costmap target = make_costmap(4, 3, std::vector<std::uint8_t>(12, 0));
+  const auto status = apply_costmap_update(msg.value(), target);
+  ASSERT_TRUE(status.ok()) << status.message();
+  EXPECT_EQ(cut_out(target, rect), cut_out(source, rect));
 }
 
 }  // namespace

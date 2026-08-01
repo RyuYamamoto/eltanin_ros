@@ -56,6 +56,10 @@ ConversionResult<eltanin_msgs::msg::CostmapUpdate> to_costmap_update_msg(
   const eltanin::map::Costmap & costmap, const eltanin::map::CellRect & rect,
   const std::string & frame_id, const builtin_interfaces::msg::Time & stamp);
 
+/// The inverse of to_costmap_update_msg; the map is left untouched unless every check passes.
+ConversionStatus apply_costmap_update(
+  const eltanin_msgs::msg::CostmapUpdate & msg, eltanin::map::Costmap & costmap);
+
 /// For visualization only; the cost range is compressed and does not survive a round trip.
 ConversionResult<nav_msgs::msg::OccupancyGrid> to_occupancy_grid(
   const eltanin::map::Costmap & costmap, const std::string & frame_id,
