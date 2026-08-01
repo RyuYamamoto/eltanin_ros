@@ -23,6 +23,8 @@
   <exec_depend>rviz2</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
 
+  <test_depend>ament_cmake_pytest</test_depend>
+
   <!-- navyu_navigation is deliberately not a dependency, even though it supplies the default map
        (design section 10): this stack replaces navyu, and declaring it would stop eltanin_ros from
        resolving on its own. Pass map:=<yaml> when navyu is not in the workspace. Task 22 gives this

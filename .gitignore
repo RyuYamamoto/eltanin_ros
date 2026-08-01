@@ -1,0 +1,3 @@
+# Importing a launch file compiles it, which both launch and test_launch_file.py do.
+__pycache__/
+*.pyc

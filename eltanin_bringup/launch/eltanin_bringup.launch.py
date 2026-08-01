@@ -12,16 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License
 
-"""Bring up the global half of the stack: a map, global_costmap and global_path_planner.
-
-Every argument is declared. navyu's localization.launch.py read an argument it never declared
-(design section 2.4-4), which is why the value silently stayed at its default.
-"""
+"""Bring up the global half of the stack: a map, global_costmap and global_path_planner."""
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess
 from launch.conditions import IfCondition, UnlessCondition
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import ComposableNodeContainer, Node
 from launch_ros.descriptions import ComposableNode
 from launch_ros.substitutions import FindPackageShare
@@ -44,17 +40,10 @@ ARGUMENTS = [
     ),
     DeclareLaunchArgument("use_rviz", default_value="true", description="Start RViz."),
     DeclareLaunchArgument(
-        "use_map_server",
-        default_value="true",
-        description="Start nav2_map_server. Turn off when something else publishes /map.",
-    ),
-    DeclareLaunchArgument(
         "map",
-        default_value=PathJoinSubstitution(
-            [FindPackageShare("navyu_navigation"), "map", "map.yaml"]
-        ),
-        description="Map yaml for nav2_map_server. The default is navyu's map, which is not a "
-        "declared dependency: pass map:=<yaml> when navyu is not in the workspace (task 22).",
+        default_value="",
+        description="Map yaml for nav2_map_server. Empty means no map_server: /map then comes "
+        "from whoever else publishes it.",
     ),
     DeclareLaunchArgument(
         "params_file",
@@ -70,25 +59,16 @@ ARGUMENTS = [
         ),
         description="RViz configuration.",
     ),
-    DeclareLaunchArgument(
-        "use_static_robot_tf",
-        default_value="false",
-        description="Publish a fixed map -> base frame. For driving the planner by hand only; "
-        "localization or the simulator owns this transform otherwise.",
-    ),
-    DeclareLaunchArgument(
-        "static_robot_frame",
-        default_value="base_footprint",
-        description="Child frame of the fixed transform; must match frames.base.",
-    ),
-    DeclareLaunchArgument("static_robot_x", default_value="0.0", description="Its x in map [m]."),
-    DeclareLaunchArgument("static_robot_y", default_value="0.0", description="Its y in map [m]."),
 ]
+
+
+def have_map():
+    """Whether map names a file. One instance per action, since a Condition is not shared."""
+    return IfCondition(PythonExpression(['"', LaunchConfiguration("map"), '" != ""']))
 
 
 def generate_launch_description():
     use_composition = LaunchConfiguration("use_composition")
-    use_map_server = LaunchConfiguration("use_map_server")
     use_sim_time = LaunchConfiguration("use_sim_time")
 
     robot_params = PathJoinSubstitution(
@@ -99,9 +79,11 @@ def generate_launch_description():
             [LaunchConfiguration("robot_profile"), ".yaml"],
         ]
     )
-    # Order matters: the machine profile arrives through /**, the node file by node name, and the
-    # dict last. No key appears in more than one of them (N-6).
+    # The machine profile arrives through /**, the node file by node name. No key is in both.
     parameters = [robot_params, LaunchConfiguration("params_file"), {"use_sim_time": use_sim_time}]
+
+    # 16 MB of costmap crosses this boundary on every update, and nothing needs a copy of it.
+    intra_process = [{"use_intra_process_comms": True}]
 
     components = [
         ComposableNode(
@@ -109,17 +91,18 @@ def generate_launch_description():
             plugin="eltanin_costmap::GlobalCostmap",
             name="global_costmap",
             parameters=parameters,
+            extra_arguments=intra_process,
         ),
         ComposableNode(
             package="eltanin_planner",
             plugin="eltanin_planner::GlobalPathPlanner",
             name="global_path_planner",
             parameters=parameters,
+            extra_arguments=intra_process,
         ),
     ]
 
-    # component_container_mt, never the single-threaded one: both nodes rely on a multi-threaded
-    # executor to keep their subscriptions alive while a long computation runs (R-P6-3).
+    # Never the single-threaded container: a long computation would stop the subscriptions.
     container = ComposableNodeContainer(
         name="eltanin_container",
         namespace="",
@@ -130,8 +113,7 @@ def generate_launch_description():
         condition=IfCondition(use_composition),
     )
 
-    # The same nodes as separate processes. The generated executables run the same registered
-    # component behind the same executor, so this path fails the same way the composed one does.
+    # The same registered components as separate processes, so both paths fail the same way.
     separate_nodes = [
         Node(
             package="eltanin_costmap",
@@ -161,32 +143,14 @@ def generate_launch_description():
             {"use_sim_time": use_sim_time},
         ],
         output="screen",
-        condition=IfCondition(use_map_server),
+        condition=have_map(),
     )
 
-    # map_server is a lifecycle node and nav2_lifecycle_manager is not part of this install, so the
-    # two transitions are driven directly. lifecycle_bringup waits for the node to appear.
+    # map_server is a lifecycle node and nav2_lifecycle_manager is not part of this install.
     activate_map_server = ExecuteProcess(
         cmd=["ros2", "run", "nav2_util", "lifecycle_bringup", "map_server"],
         output="screen",
-        condition=IfCondition(use_map_server),
-    )
-
-    static_robot_tf = Node(
-        package="tf2_ros",
-        executable="static_transform_publisher",
-        name="static_robot_tf",
-        arguments=[
-            "--frame-id",
-            "map",
-            "--child-frame-id",
-            LaunchConfiguration("static_robot_frame"),
-            "--x",
-            LaunchConfiguration("static_robot_x"),
-            "--y",
-            LaunchConfiguration("static_robot_y"),
-        ],
-        condition=IfCondition(LaunchConfiguration("use_static_robot_tf")),
+        condition=have_map(),
     )
 
     rviz = Node(
@@ -206,7 +170,6 @@ def generate_launch_description():
             activate_map_server,
             container,
             *separate_nodes,
-            static_robot_tf,
             rviz,
         ]
     )
