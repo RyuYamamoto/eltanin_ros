@@ -20,6 +20,7 @@ if(ELTANIN_ROS_ENABLE_WERROR)
 endif()
 
 add_library(${PROJECT_NAME} SHARED
+  src/global_costmap.cpp
   src/global_costmap_state.cpp
   src/observation_store.cpp
   src/update_region.cpp)
@@ -34,7 +35,20 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
   ${std_srvs_TARGETS})
 target_compile_options(${PROJECT_NAME} PRIVATE ${warning_options})
 
+# NO_UNDEFINED_SYMBOLS below calls check_cxx_compiler_flag, which rclcpp_components does not
+# include itself, so the macro fails with "Unknown CMake command" without this line.
+include(CheckCXXCompilerFlag)
+# MultiThreadedExecutor: with the default single-threaded one the 0.285 s of ~/update would stop
+# the subscriptions outright, which is what splitting the callback groups is meant to avoid.
+# NO_UNDEFINED_SYMBOLS turns a missing link into a build error rather than a dlopen failure.
+rclcpp_components_register_node(${PROJECT_NAME}
+  PLUGIN "eltanin_costmap::GlobalCostmap"
+  EXECUTABLE global_costmap
+  EXECUTOR MultiThreadedExecutor
+  NO_UNDEFINED_SYMBOLS)
+
 install(DIRECTORY include/ DESTINATION include/${PROJECT_NAME})
+# Required: the generated executable dlopens lib/libeltanin_costmap.so to find the component.
 install(TARGETS ${PROJECT_NAME} LIBRARY DESTINATION lib)
 
 if(BUILD_TESTING)
@@ -47,6 +61,11 @@ if(BUILD_TESTING)
     target_link_libraries(${test_name} ${PROJECT_NAME})
     target_compile_options(${test_name} PRIVATE ${warning_options})
   endforeach()
+
+  # The only test in this package that calls rclcpp::init; the pure parts above do not need it.
+  ament_add_gtest(test_global_costmap test/test_global_costmap.cpp TIMEOUT 60)
+  target_link_libraries(test_global_costmap ${PROJECT_NAME})
+  target_compile_options(test_global_costmap PRIVATE ${warning_options})
 endif()
 
 ament_package()
