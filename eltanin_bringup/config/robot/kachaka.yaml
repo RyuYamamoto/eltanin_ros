@@ -1,0 +1,23 @@
+# The machine profile, written once and read by every node through the /** wildcard.
+# declare_robot_profile() is the only reader of robot.* and frames.*, so a value here reaches
+# global_costmap's inflation and global_path_planner's Free/Circumscribed boundary as the same
+# number. Giving the two nodes different files is what makes those two disagree.
+/**:
+  ros__parameters:
+    robot:
+      # kachaka's collision box in base_link: x in [-0.150, 0.237], y in [-0.120, 0.120].
+      # Neither navyu's 0.6 m square nor eltanin's default 0.6 m square (design section 2.6).
+      # Every value needs a decimal point: an integer array is a different parameter type.
+      footprint: [-0.150, -0.120, 0.237, -0.120, 0.237, 0.120, -0.150, 0.120]
+      inflation_radius: 0.55
+      cost_scaling_factor: 10.0
+      # The bridge's own cap (design section C-15).
+      max_linear_vel: 0.30
+      max_angular_vel: 1.57
+      # Measured on the robot and updated there; these are placeholders (R-9).
+      max_accel: 0.5
+      max_decel: 0.5
+    frames:
+      map: map
+      odom: odom
+      base: base_footprint

@@ -1,0 +1,16 @@
+# The simulated machine. Same shape as kachaka so that a plan made in simulation is a plan the
+# real robot could also follow; only the limits differ, because the simulator has no bridge cap.
+/**:
+  ros__parameters:
+    robot:
+      footprint: [-0.150, -0.120, 0.237, -0.120, 0.237, 0.120, -0.150, 0.120]
+      inflation_radius: 0.55
+      cost_scaling_factor: 10.0
+      max_linear_vel: 0.50
+      max_angular_vel: 1.57
+      max_accel: 1.0
+      max_decel: 1.0
+    frames:
+      map: map
+      odom: odom
+      base: base_footprint

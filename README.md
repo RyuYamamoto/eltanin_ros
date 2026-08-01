@@ -145,7 +145,7 @@ creates it, so that nothing looks available before it is.
 | `eltanin_controller` | `path_follower` and `collision_predictor` nodes | not implemented (tasks 11, 12) |
 | `eltanin_navigator` | orchestrator | not implemented (tasks 13, 21) |
 | `eltanin_simulator` | `simple_simulator` node | not implemented (task 10) |
-| `eltanin_bringup` | launch / config / rviz / map, no code | not implemented (tasks 8, 22) |
+| `eltanin_bringup` | launch / config / rviz / map, no code | **`eltanin_bringup.launch.py` implemented**; simulation and kachaka bringup in tasks 10 and 22 |
 
 The metapackage's `package.xml` lists one `exec_depend` per implemented package, so the list is also
 the list of what exists.
@@ -535,9 +535,63 @@ runs it at `-O0`:
 - §6.3 does not say that the pre-checks must track `eltanin`'s `plan()`. They must, in order, radius
   and model; see the duplication note above.
 
-## Launch
+## `eltanin_bringup`
 
-No launch files exist yet. Simulation bringup is added in task 8 and kachaka bringup in task 22.
+The package holds no code: launch, parameters and RViz configuration only. One launch file exists so
+far, covering the global half of the stack.
+
+```bash
+ros2 launch eltanin_bringup eltanin_bringup.launch.py
+```
+
+That starts `nav2_map_server`, brings it through its two lifecycle transitions, and loads
+`global_costmap` and `global_path_planner` into one `component_container_mt`. On the 4000x4000 map
+below the costmap is built in about 0.3 s, after which a plan can be requested:
+
+```bash
+ros2 action send_goal /global_path_planner/compute_path_to_pose \
+  eltanin_msgs/action/ComputePathToPose \
+  "{goal: {header: {frame_id: map}, pose: {position: {x: 5.0, y: 3.0}, orientation: {w: 1.0}}},
+    start: {header: {frame_id: map}, pose: {position: {x: 0.0, y: 0.0}, orientation: {w: 1.0}}},
+    use_start: true}"
+```
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `robot_profile` | `kachaka` | Which `config/robot/<name>.yaml` the whole stack reads. `sim_robot` is the other one. |
+| `use_sim_time` | `false` | Follow `/clock`. The planner's tf timeout only expires while that clock runs. |
+| `use_composition` | `true` | One container, or one process per node. Both paths run the same registered component. |
+| `use_rviz` | `true` | Start RViz with `rviz/eltanin.rviz`. |
+| `use_map_server` | `true` | Turn off when something else publishes `/map`. |
+| `map` | navyu's `map.yaml` | Map for `nav2_map_server`. |
+| `params_file` | `config/navigation.yaml` | Node-specific parameters, keyed by node name. |
+| `rviz_config` | `rviz/eltanin.rviz` | RViz configuration. |
+| `use_static_robot_tf` | `false` | Publish a fixed `map` to base transform, for driving the planner by hand before localization or the simulator exists. `static_robot_frame` / `static_robot_x` / `static_robot_y` go with it. |
+
+Every argument is declared. navyu's `localization.launch.py` read one it never declared, so the value
+silently stayed at its default.
+
+**Parameters are written once.** `config/robot/*.yaml` uses the `/**` wildcard, so `robot.*` and
+`frames.*` reach every node as the same number — which is what keeps `global_costmap`'s inflation
+threshold and `global_path_planner`'s `Free` boundary in agreement. `config/navigation.yaml` holds
+only what is specific to one node, keyed by node name. No key appears in both files. navyu had four
+copies of the same values and they had drifted apart.
+
+**The default map is borrowed.** `map` defaults to `navyu_navigation`'s 4000x4000 map.
+`navyu_navigation` is deliberately **not** declared as a dependency — this stack replaces navyu, and
+declaring it would stop `eltanin_ros` from resolving on its own — so pass `map:=<yaml>` when navyu is
+not in the workspace. Task 22 gives the package a map of its own.
+
+Two things this launch file does not have yet: `simulation.launch.py` and `kachaka.launch.py` (tasks
+10 and 22), and the `autostart_output` argument, which belongs to `collision_predictor` (task 12) and
+is not declared while there is nothing to switch.
+
+`nav2_lifecycle_manager` is not part of this install, so the two `map_server` transitions are driven
+by `ros2 run nav2_util lifecycle_bringup` instead of a manager node.
+
+RViz's Map display logs one shader link error (`indexed_8bit_image.vert`, "active samplers with a
+different type refer to the same texture image unit") on some drivers. It is an upstream rviz2
+issue, not a problem with the configuration; the display is still created.
 
 ## Development
 

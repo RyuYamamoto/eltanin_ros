@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>eltanin_bringup</name>
+  <version>0.0.0</version>
+  <description>
+    Launch, parameters and RViz configuration for the eltanin navigation stack. The package holds no
+    code (design section 4.1): its job is that one value is written in one place and every node
+    reads it from there, which is where navyu had four copies that had drifted apart.
+  </description>
+  <maintainer email="ryuyamamoto@pfrobotics.jp">RyuYamamoto</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>eltanin_costmap</exec_depend>
+  <exec_depend>eltanin_planner</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>nav2_map_server</exec_depend>
+  <exec_depend>nav2_util</exec_depend>
+  <exec_depend>rclcpp_components</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+
+  <!-- navyu_navigation is deliberately not a dependency, even though it supplies the default map
+       (design section 10): this stack replaces navyu, and declaring it would stop eltanin_ros from
+       resolving on its own. Pass map:=<yaml> when navyu is not in the workspace. Task 22 gives this
+       package a map of its own and the question goes away. -->
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

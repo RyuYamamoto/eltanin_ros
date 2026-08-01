@@ -1,0 +1,30 @@
+# Node-specific parameters, keyed by node name. Machine values are not repeated here: they live in
+# config/robot/*.yaml and reach every node through the /** wildcard (design section 7).
+#
+# Every key below already has the same default inside its node, so this file exists to make the
+# configuration visible and editable, not to make the stack start (F-14).
+global_costmap:
+  ros__parameters:
+    # A cell /map never saw stays unknown; inflating it would invent obstacles.
+    inflate_unknown: false
+    occupied_threshold: 65
+    free_threshold: 25
+    # /global_costmap/global_costmap_visual for RViz, which cannot draw eltanin_msgs/Costmap.
+    publish_visualization: true
+
+global_path_planner:
+  ros__parameters:
+    # Chebyshev radius used to nudge a blocked start onto a free cell; 0 disables the rescue.
+    start_search_radius_cells: 8
+    # weight_data + 4 * weight_smooth must stay below 2 or the smoother diverges; the node
+    # refuses to start otherwise.
+    weight_data: 0.5
+    weight_smooth: 0.3
+    smoother_tolerance: 0.0001
+    smoother_max_iterations: 100
+    # Publishes /global_path_planner/global_path_raw, the path before smoothing.
+    publish_raw_path: false
+    # An unknown cell is not traversable; set true only where driving into the unknown is wanted.
+    unknown_is_free: false
+    # A deliberate departure from the design's timeout of 0, which is for periodic work (D-T7-7).
+    tf_lookup_timeout: 0.1
