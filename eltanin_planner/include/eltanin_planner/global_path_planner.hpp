@@ -18,8 +18,17 @@
 #include "eltanin_planner/planner_parameters.hpp"
 
 #include <eltanin/map/cost_model.hpp>
+#include <eltanin/map/grid_map.hpp>
 #include <eltanin_ros_common/robot_profile.hpp>
+#include <eltanin_ros_common/warn_once.hpp>
 #include <rclcpp/rclcpp.hpp>
+
+#include <eltanin_msgs/msg/costmap.hpp>
+#include <eltanin_msgs/msg/costmap_update.hpp>
+
+#include <cstdint>
+#include <memory>
+#include <mutex>
 
 namespace eltanin_planner
 {
@@ -31,10 +40,32 @@ public:
   explicit GlobalPathPlanner(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
 
 private:
+  void on_costmap(eltanin_msgs::msg::Costmap::ConstSharedPtr msg);
+  void on_costmap_update(eltanin_msgs::msg::CostmapUpdate::ConstSharedPtr msg);
+
+  /// The pointer a plan runs against; taken under the lock and then read without it.
+  std::shared_ptr<const eltanin::map::Costmap> snapshot() const;
+
   const eltanin_ros_common::RobotProfile profile_;
   const PlannerParameters parameters_;
   /// The threshold global_costmap inflated with; the same robot.* yaml has to reach both nodes.
   const eltanin::map::CostTraversabilityModel model_;
+
+  /// Both costmap subscriptions, so that replacing and patching the belief cannot interleave.
+  rclcpp::CallbackGroup::SharedPtr belief_group_;
+  rclcpp::Subscription<eltanin_msgs::msg::Costmap>::SharedPtr costmap_subscription_;
+  rclcpp::Subscription<eltanin_msgs::msg::CostmapUpdate>::SharedPtr update_subscription_;
+
+  mutable std::mutex belief_mutex_;
+  std::shared_ptr<const eltanin::map::Costmap> costmap_;
+  /// Raw nanoseconds rather than rclcpp::Time, whose comparison throws on a clock_type mismatch.
+  std::int64_t costmap_stamp_ns_{0};
+
+  eltanin_ros_common::WarnOnceLatch whole_frame_latch_;
+  eltanin_ros_common::WarnOnceLatch whole_conversion_latch_;
+  eltanin_ros_common::WarnOnceLatch patch_no_map_latch_;
+  eltanin_ros_common::WarnOnceLatch patch_frame_latch_;
+  eltanin_ros_common::WarnOnceLatch patch_reject_latch_;
 };
 
 }  // namespace eltanin_planner
