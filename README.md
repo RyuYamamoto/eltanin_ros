@@ -593,6 +593,27 @@ RViz's Map display logs one shader link error (`indexed_8bit_image.vert`, "activ
 different type refer to the same texture image unit") on some drivers. It is an upstream rviz2
 issue, not a problem with the configuration; the display is still created.
 
+### The first plan after startup can come back INPUT_STALE
+
+Observed once under `rmw_zenoh_cpp` on the 4000x4000 map: `map_server` was `active`,
+`global_costmap` had built its costmap, and `/global_costmap/global_costmap` had one publisher and
+one subscriber — yet `global_path_planner` answered `OUTCOME_INPUT_STALE`, meaning the whole-area
+message it is `transient_local` on had not reached it. One call to
+
+```bash
+ros2 service call /global_costmap/update std_srvs/srv/Trigger
+```
+
+republishes the whole area and every plan after that succeeds.
+
+The cause is not established: it is either the durability replay of a 16 MB sample to a
+late-joining subscription, or a discovery race between the two components in the same container.
+It is intermittent — the same launch has also come up planning correctly on the first goal. What is
+certain is that both sides agree on `KeepLast(1)` / reliable / `transient_local`, and that the
+belief exists on the publishing side while the subscriber says it has nothing. **Worth settling
+before task 13 makes `navigator` depend on the first plan succeeding**; until then, `~/update` is
+the workaround, and it is the call `navigator` is expected to make before planning anyway.
+
 ## Development
 
 ### pre-commit
