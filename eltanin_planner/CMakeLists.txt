@@ -24,6 +24,7 @@ endif()
 
 add_library(${PROJECT_NAME} SHARED
   src/global_path_planner.cpp
+  src/plan_attempt.cpp
   src/planner_parameters.cpp)
 target_include_directories(${PROJECT_NAME} PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
@@ -60,6 +61,7 @@ install(TARGETS ${PROJECT_NAME} LIBRARY DESTINATION lib)
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   foreach(test_name
+      test_goal_validation
       test_planner_parameters)
     ament_add_gtest(${test_name} test/${test_name}.cpp)
     target_link_libraries(${test_name} ${PROJECT_NAME})
