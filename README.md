@@ -433,6 +433,30 @@ failure will be reported as one of the endpoint failures. `test_goal_validation.
 boundary, and the smoothing step is deliberately left outside `attempt_plan()` so that a
 cancellation can be observed between the search and the smoother.
 
+### Two searches, one set of failure classes
+
+`planner_type` selects between `astar` (8-connected, over cells) and `hybrid_astar` (over
+`(x, y, yaw)`, honouring `hybrid.minimum_turning_radius`). Both go through `eltanin`'s same
+`Planner::plan()`, so the pre-checks and the six outcomes above are shared; only the search itself
+differs, and the failing line names which one ran.
+
+**A Hybrid A\* path is published unsmoothed.** The smoother only pulls interior points towards the
+average of their neighbours: it would take back exactly the curvature bound Hybrid A\* was asked to
+respect. `smoother_*` therefore has no effect while `planner_type` is `hybrid_astar`, and
+`~/global_path_raw` carries the same path as `~/global_path`.
+
+Hybrid A\* checks traversability at the vehicle reference point only, which is sound here because
+the costmap it plans on is the inflated one `global_costmap` publishes. Turn on
+`publish_footprint_path` to see that for yourself.
+
+**`hybrid.max_states` is a memory fence, and it is not optional.** The search sizes three arrays
+from `cells * heading_bins * <its own motion mode count>` *before* it expands anything, so
+`max_expansions` cannot bound it. On the 4000x4000 map at 0.05 m with the default 72 heading
+bins that is 4.6 billion states: measured at 74 GB of virtual and 55 GB resident, which took the
+development machine's OOM killer to stop. Above `hybrid.max_states` the plan is refused with one
+line and `OUTCOME_PLAN_FAILED` instead. Raise `hybrid.max_states` only together with a smaller
+map or fewer `heading_bins`, and budget roughly 70 bytes per state.
+
 ### Interruption is answered at four points, not during the search
 
 A search cannot be interrupted, so a cancel or a preemption is observed only at four boundaries:
@@ -451,6 +475,7 @@ property of this code and not of `std::thread::hardware_concurrency()`.
 | `global_costmap/global_costmap_updates` (in) | `eltanin_msgs/CostmapUpdate` | `KeepLast(1)`, reliable, volatile | Applied to the belief. |
 | `~/global_path` (out) | `nav_msgs/Path` | `KeepLast(1)`, reliable, volatile | Smoothed. Published before `succeed()`, so a successful result always has its path on the topic too. |
 | `~/global_path_raw` (out) | `nav_msgs/Path` | same | Unsmoothed; **the publisher only exists when `publish_raw_path` is set**. |
+| `~/footprint_path` (out) | `visualization_msgs/MarkerArray` | same | `robot.footprint` laid along the published path, every `footprint_marker_stride` poses and always at the last one. Only exists when `publish_footprint_path` is set. |
 
 Neither path topic is `transient_local`: a late subscriber would otherwise be handed, as the newest
 thing available, the path of a goal that was abandoned long ago. The authoritative hand-over is the
@@ -479,7 +504,19 @@ the last pose's yaw alone, so the yaw that was asked for is the yaw that comes b
 
 | Key | Default | From |
 |---|---|---|
-| `start_search_radius_cells` | `8` | `eltanin::planner::AStarParams` |
+| `planner_type` | `astar` | `astar` or `hybrid_astar` |
+| `start_search_radius_cells` | `8` | `eltanin::planner::AStarParams`; both searches take it, so it is one key |
+| `hybrid.heading_bins` | `72` | `eltanin::planner::HybridAStarParams` |
+| `hybrid.minimum_turning_radius` | `0.4` | same |
+| `hybrid.motion_step` | `0.0` | same; 0 selects one map cell |
+| `hybrid.collision_check_step` | `0.0` | same; 0 selects half a map cell |
+| `hybrid.dubins_expansion_distance` | `1.0` | same |
+| `hybrid.steering_penalty` | `0.05` | same |
+| `hybrid.steering_change_penalty` | `0.10` | same |
+| `hybrid.max_expansions` | `0` | same; 0 is no bound |
+| `hybrid.max_states` | `20000000` | this node; a ceiling on `cells * heading_bins` |
+| `publish_footprint_path` | `false` | this node |
+| `footprint_marker_stride` | `10` | this node |
 | `weight_data` | `0.5` | `eltanin::planner::SmootherParams` |
 | `weight_smooth` | `0.3` | same |
 | `smoother_tolerance` | `1e-4` | same (`tolerance`) |
@@ -494,6 +531,10 @@ so that a change on the `eltanin` side is noticed rather than absorbed. As in `e
 eight are read once in the constructor and never again, and a value the node cannot work with
 produces one `ERROR` line and a `std::runtime_error` from the constructor. Only the first violated
 condition is reported.
+
+**The `hybrid.*` values are validated whichever search is selected**, so switching `planner_type`
+later cannot turn a value that was sitting unused into a `std::invalid_argument` from
+`HybridAStarPlanner`'s constructor, thrown mid-plan.
 
 `weight_data + 4 * weight_smooth < 2` is checked at startup even though `eltanin` checks it too.
 Breaking it makes the smoother diverge, and `eltanin`'s own report is a `std::invalid_argument`
@@ -537,39 +578,115 @@ runs it at `-O0`:
 
 ## `eltanin_bringup`
 
-The package holds no code: launch, parameters and RViz configuration only. One launch file exists so
-far, covering the global half of the stack.
+The package holds no code: launch, parameters, RViz configuration and the tests that fence them. One
+launch file exists so far, covering the global half of the stack — a map, `global_costmap` and
+`global_path_planner`. Nothing here drives a robot: there is no controller and no `cmd_vel`
+publisher in the stack yet, so this cannot move anything.
+
+### Running it, from a clean shell
+
+Five terminals, all of them with the same environment. Steps 1 and 2 are once per machine; 3 to 6
+are the run.
+
+**1. Environment.** Every terminal below needs these three lines. `rmw_zenoh_cpp` is not in
+`/opt/ros/jazzy` on the development machine, hence the second one (see *Requirements*).
 
 ```bash
-ros2 launch eltanin_bringup eltanin_bringup.launch.py
+source /opt/ros/jazzy/setup.bash
+source ~/workspace/ros2_ws/install/setup.bash
+export RMW_IMPLEMENTATION=rmw_zenoh_cpp
 ```
 
-That starts `nav2_map_server`, brings it through its two lifecycle transitions, and loads
-`global_costmap` and `global_path_planner` into one `component_container_mt`. On the 4000x4000 map
-below the costmap is built in about 0.3 s, after which a plan can be requested:
+**2. Build, then source the workspace.**
+
+```bash
+cd ~/workspace/eltanin_ws
+colcon build --symlink-install --packages-ignore eltanin \
+  --cmake-args --no-warn-unused-cli -DCMAKE_BUILD_TYPE=RelWithDebInfo
+source install/setup.bash
+```
+
+**3. The zenoh router** — `rmw_zenoh_cpp` discovers through it, so it comes up before any node.
+
+```bash
+ros2 run rmw_zenoh_cpp rmw_zenohd
+```
+
+**4. Two transforms, by hand.** There is no localization and no simulator yet, and **RViz draws
+nothing at all without a transform** — see *There is no localization yet* below for why, and why
+this is not in the launch file. Two rather than one, so that a goal given in `odom` exercises the
+planner's tf path. Replace the zeros with a pose in free space if the map's origin is not free.
+
+```bash
+ros2 run tf2_ros static_transform_publisher --frame-id map --child-frame-id odom
+ros2 run tf2_ros static_transform_publisher --frame-id odom --child-frame-id base_footprint
+```
+
+**5. The stack.** `map` names the static map to load; leave it out and no `map_server` starts, which
+is the other ingestion path.
+
+```bash
+ros2 launch eltanin_bringup eltanin_bringup.launch.py \
+  map:=$(ros2 pkg prefix navyu_navigation)/share/navyu_navigation/map/map.yaml
+```
+
+Wait for these two lines before giving a goal — the second one is the costmap the planner needs:
+
+```
+[map_server] Read map ...: 4000 X 4000 map @ 0.05 m/cell
+[global_costmap] built a 4000x4000 costmap at 0.050000 m from /map, 0 observation cells
+```
+
+**6. A goal.** RViz has no goal tool on purpose (nothing subscribes to `/goal_pose` until task 13),
+so goals are given on the action. `use_start: false` reads the start from tf; pass `use_start: true`
+with a `start` pose to plan from somewhere else.
 
 ```bash
 ros2 action send_goal /global_path_planner/compute_path_to_pose \
   eltanin_msgs/action/ComputePathToPose \
-  "{goal: {header: {frame_id: map}, pose: {position: {x: 5.0, y: 3.0}, orientation: {w: 1.0}}},
-    start: {header: {frame_id: map}, pose: {position: {x: 0.0, y: 0.0}, orientation: {w: 1.0}}},
-    use_start: true}"
+  "{goal: {header: {frame_id: map},
+           pose: {position: {x: 5.0, y: 3.0}, orientation: {w: 1.0}}},
+    use_start: false}"
 ```
+
+The result carries `outcome`, `message` and the path. `outcome: 0` is success; every other value is
+explained in the `eltanin_planner` table above, and `message` is the same single line the node logs.
+
+**What to look at.** In RViz: `StaticMap` and `GlobalCostmap` (the second one shows the inflation),
+`GlobalPath` once a goal succeeds, and `FootprintPath` for the robot outline along it. On the
+command line:
+
+```bash
+ros2 topic echo --once /global_costmap/global_costmap --field header   # the belief exists
+ros2 param get /global_costmap robot.footprint                        # and both nodes agree
+ros2 param get /global_path_planner robot.footprint                   # on the machine
+```
+
+**Rebuilding the costmap.** There is no timer. If the first plan comes back `INPUT_STALE`, or after
+`clear_observations`, republish the whole area:
+
+```bash
+ros2 service call /global_costmap/update std_srvs/srv/Trigger
+```
+
+**Shutting down.** `Ctrl-C` in each terminal, the launch one last if the order matters to you.
+Nothing persists between runs.
+
+### Arguments
 
 | Argument | Default | Meaning |
 |---|---|---|
 | `robot_profile` | `kachaka` | Which `config/robot/<name>.yaml` the whole stack reads. `sim_robot` is the other one. |
-| `use_sim_time` | `false` | Follow `/clock`. The planner's tf timeout only expires while that clock runs. |
-| `use_composition` | `true` | One container, or one process per node. Both paths run the same registered component. |
+| `use_sim_time` | `false` | Follow `/clock`. Pass `true` with the simulator; the planner's tf timeout only expires while that clock runs. |
+| `use_composition` | `true` | One container, or one process per node. Both paths run the same registered component; the separate one sends 16 MB across a process boundary on every update and is for debugging. |
 | `use_rviz` | `true` | Start RViz with `rviz/eltanin.rviz`. |
-| `use_map_server` | `true` | Turn off when something else publishes `/map`. |
-| `map` | navyu's `map.yaml` | Map for `nav2_map_server`. |
+| `map` | empty | Map yaml for `nav2_map_server`. **Empty means no `map_server` at all**, and the static map then comes from whoever else publishes `/map`. |
 | `params_file` | `config/navigation.yaml` | Node-specific parameters, keyed by node name. |
 | `rviz_config` | `rviz/eltanin.rviz` | RViz configuration. |
-| `use_static_robot_tf` | `false` | Publish a fixed `map` to base transform, for driving the planner by hand before localization or the simulator exists. `static_robot_frame` / `static_robot_x` / `static_robot_y` go with it. |
 
-Every argument is declared. navyu's `localization.launch.py` read one it never declared, so the value
-silently stayed at its default.
+Every argument is declared, every declared argument is read, and `test_launch_file.py` fails if
+either stops being true. navyu's `localization.launch.py` read one it never declared, so passing it
+changed nothing and `--show-args` did not list it.
 
 **Parameters are written once.** `config/robot/*.yaml` uses the `/**` wildcard, so `robot.*` and
 `frames.*` reach every node as the same number — which is what keeps `global_costmap`'s inflation
@@ -577,17 +694,106 @@ threshold and `global_path_planner`'s `Free` boundary in agreement. `config/navi
 only what is specific to one node, keyed by node name. No key appears in both files. navyu had four
 copies of the same values and they had drifted apart.
 
-**The default map is borrowed.** `map` defaults to `navyu_navigation`'s 4000x4000 map.
-`navyu_navigation` is deliberately **not** declared as a dependency — this stack replaces navyu, and
-declaring it would stop `eltanin_ros` from resolving on its own — so pass `map:=<yaml>` when navyu is
-not in the workspace. Task 22 gives the package a map of its own.
+### The static map has two ways in, and `map` picks between them
+
+`global_costmap` subscribes to `/map` and nothing else; it never opens a file. The two ingestion
+paths are therefore two ways of getting something onto that topic:
+
+| `map` | What happens |
+|---|---|
+| a yaml path | `nav2_map_server` reads the file and publishes it `transient_local`. |
+| empty (default) | No `map_server` is started, and `/map` is expected from elsewhere — the kachaka bridge's `/kachaka/mapping/map`, a SLAM node, or a `map_server` run by hand. |
+
+**The default is empty on purpose.** Pointing it at `navyu_navigation`'s map would be convenient and
+wrong twice: this stack replaces navyu, so depending on it at runtime is backwards, and
+`DeclareLaunchArgument` resolves its default value whether or not anything reads it — a
+`FindPackageShare("navyu_navigation")` default aborts the whole launch in a workspace without navyu,
+even with the map server switched off. Task 22 gives the package a map of its own.
+
+**Do not republish the same map as a keep-alive.** A second `/map` message replaces the costmap
+object and drops every accumulated observation with it, for the reason in *Why accumulating state
+does not break the origin rule* above.
+
+### Composition is what makes the 16 MB affordable
+
+Both components are loaded with `use_intra_process_comms`, so the whole-area costmap is shared as a
+pointer rather than serialized on every update. That does not cost the planner its late subscription:
+`rclcpp`'s intra-process manager replays a `transient_local` publisher's last message to a
+`transient_local` subscription, and both nodes take the message as a `ConstSharedPtr` and copy only
+what they keep.
+
+`nav2_lifecycle_manager` is not part of this install, so the two `map_server` transitions are driven
+by `ros2 run nav2_util lifecycle_bringup` instead of a manager node.
 
 Two things this launch file does not have yet: `simulation.launch.py` and `kachaka.launch.py` (tasks
 10 and 22), and the `autostart_output` argument, which belongs to `collision_predictor` (task 12) and
 is not declared while there is nothing to switch.
 
-`nav2_lifecycle_manager` is not part of this install, so the two `map_server` transitions are driven
-by `ros2 run nav2_util lifecycle_bringup` instead of a manager node.
+### There is no localization yet, so tf comes from the command line
+
+Nothing in this launch file publishes a transform, and **RViz draws nothing at all without one** —
+`tf2` answers `canTransform` for two frames it has never heard of with false, even when they have the
+same name, so a map whose `header.frame_id` is `map` does not appear under a fixed frame of `map`
+until `map` exists in the tree. `use_start: false` needs the same transform for a different reason:
+that is where the planner reads the robot's pose.
+
+Until localization (task 22) or the simulator (task 10) owns it, publish it by hand — step 4 of the
+procedure above.
+
+This deliberately stays out of the launch file. An argument that fabricates the robot's pose is one
+`kachaka.launch.py` could inherit, and a fixed transform on the real robot is a plan computed from
+the wrong place.
+
+### What M2 asked for, and how to see it
+
+| Condition | How to check |
+|---|---|
+| The static map is ingested both ways | Launch with `map:=<yaml>`; then launch with `map:=''` and run `map_server` by hand. `/global_costmap/global_costmap_visual` appears either way. |
+| The global costmap is built and published | `ros2 topic echo --once /global_costmap/global_costmap --field header`. There is no rate to measure: the node has no timer. |
+| A goal produces a path | The action result carries `outcome: 0` and the path, and `/global_path_planner/global_path` carries the same one. The last pose keeps the yaw that was asked for. |
+| RViz shows map, costmap and path | The two `Map` displays and `GlobalPath`, with the transforms from step 4. The costmap uses the `costmap` colour scheme, without which the inflation is one flat shade. |
+| An unreachable goal fails visibly | A goal inside a wall returns `outcome: 5` (`OUTCOME_NO_PATH`) with a `message`; a goal off the map returns `outcome: 2` (`OUTCOME_START_GOAL_FAILED`). Neither is a silent empty path, which is what navyu produced. |
+| A frame mismatch is detected | A goal in `odom` is transformed and succeeds. A goal in a frame tf has never seen returns `outcome: 2`, and the log line names both frames, the stamp and the timeout. An empty `frame_id` is refused rather than assumed to be `map`. |
+
+Run on navyu's 4000x4000 map with the transforms of step 4, `use_rviz:=false`, and — **unlike the
+procedure above** — the default `rmw_fastrtps_cpp` rather than `rmw_zenoh_cpp`, so the numbers below
+say nothing about zenoh. `map_server` read the map in 0.24 s and `global_costmap` built the whole
+area 0.28 s later; `lifecycle_bringup` drove both transitions without a manager node.
+
+| Goal | Result |
+|---|---|
+| `(5.0, 3.0)` in `map`, `use_start: true` from `(0, 0)` | `outcome: 0`, 212 poses, 11.43 m, searched in 68.5 ms |
+| the same with `use_start: false` | identical, so the pose read from tf matches the one passed by hand |
+| `(90, 90)`, unknown space | `outcome: 5` — *rejected goal cell (3799, 3799): cost 255 classifies as Inscribed, not Free; the goal is reported, not moved* |
+| `(500, 0)`, off the map | `outcome: 2` — *it lies outside the 4000x4000 map at 0.050000 m from (-100.000000, -100.000000)* |
+| `(5.0, 3.0)` in `odom` | `outcome: 0` — transformed, then planned |
+| the same in `nowhere` | `outcome: 2` — *'nowhere' to frames.map 'map' at 0 ns is not available within 0.100000 s* |
+| the same with an empty `frame_id` | `outcome: 2` — *its header.frame_id is empty; frames.map 'map' is not assumed* |
+
+`ros2 param get` on both nodes returns the same `robot.inflation_radius` and the same
+`robot.footprint`, which is the property the whole parameter layout exists to guarantee.
+
+One thing to know when checking by hand: `ros2 topic echo --once
+/global_path_planner/global_path` after the plan has finished prints nothing, because that topic is
+`volatile` on purpose (a late subscriber must not be handed an abandoned goal's path). Echo it in
+another terminal before sending the goal, or read the path out of the action result.
+
+### The fences
+
+`colcon test` runs four pytest files over the configuration itself. They exist because none of what
+they check fails at startup:
+
+| Test | What it refuses |
+|---|---|
+| `test_robot_profile_config.py` | A profile missing a key (it would fall back to the C++ default and stop describing the machine), a footprint written with integer literals, and a kachaka profile that has drifted from `declare_robot_profile()`'s defaults or stopped being the collision box. |
+| `test_navigation_config.py` | A node-name key no node answers to, a machine value written here as well as in `robot/*.yaml`, a number whose YAML spelling gives it the wrong parameter type, and smoother weights that diverge. |
+| `test_rviz_config.py` | A display whose topic nothing publishes, a display whose publisher is switched off in `navigation.yaml`, the wrong colour scheme on the costmap, and a tool that publishes a topic nobody reads. |
+| `test_launch_file.py` | An argument read but not declared, an argument declared but not read, the single-threaded container, a component without `use_intra_process_comms`, and the two start-up paths passing different parameters. |
+
+The `test_rviz_config.py` gate is the one worth knowing about when adding a display: a topic that
+only exists when a parameter is true has to have that parameter turned on in the same commit. That is
+why `publish_footprint_path` is `true` in `navigation.yaml` — `FootprintPath` is in the RViz
+configuration, and a display of a topic that is never published is the navyu defect this fence names.
 
 RViz's Map display logs one shader link error (`indexed_8bit_image.vert`, "active samplers with a
 different type refer to the same texture image unit") on some drivers. It is an upstream rviz2
@@ -613,6 +819,28 @@ certain is that both sides agree on `KeepLast(1)` / reliable / `transient_local`
 belief exists on the publishing side while the subscriber says it has nothing. **Worth settling
 before task 13 makes `navigator` depend on the first plan succeeding**; until then, `~/update` is
 the workaround, and it is the call `navigator` is expected to make before planning anyway.
+
+**This was observed before the components were given `use_intra_process_comms`**, which moves the
+replay from the middleware to `rclcpp`'s intra-process manager and takes `rmw_zenoh_cpp` out of that
+path entirely. Whether the symptom survives the change has not been rechecked, so neither the
+observation nor its absence should be taken as settled.
+
+### Corrections to the design document
+
+- §6.3 and the `eltanin_planner` topic table above say the launch file remaps the costmap
+  subscriptions. It does not, and it should not: both nodes keep their fixed names in the root
+  namespace, where `global_costmap/global_costmap` already resolves to what `global_costmap`
+  publishes as `~/global_costmap`. A remap would be a line of wiring with no reason a reader could
+  find.
+- §7 lists the launch arguments but not their defaults. `map` is empty, which means no `map_server`;
+  see the two ingestion paths above for why the alternative aborts the launch.
+- §7 does not say how `map_server` is started. It is a lifecycle node and `nav2_lifecycle_manager` is
+  not part of this install, so `nav2_util`'s `lifecycle_bringup` drives the two transitions.
+- §7 lists `autostart_output` among this launch file's arguments. It is not declared here: its
+  consumer is `collision_predictor` (task 12), and until then it could only be an argument that does
+  nothing when passed.
+- §7 does not mention tf. Nothing here publishes one, and RViz needs one before it draws anything;
+  the commands are above.
 
 ## Development
 
