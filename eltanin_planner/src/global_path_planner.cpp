@@ -133,6 +133,8 @@ PlannerParameters require_parameters(rclcpp::Node & node)
     require_parameter(node, KEY_ANALYTIC_EXPANSION_RATIO, defaults.hybrid.analytic_expansion_ratio);
   parameters.hybrid.free_goal_yaw =
     require_parameter(node, KEY_FREE_GOAL_YAW, defaults.hybrid.free_goal_yaw);
+  parameters.hybrid.heuristic_weight =
+    require_parameter(node, KEY_HEURISTIC_WEIGHT, defaults.hybrid.heuristic_weight);
   parameters.hybrid_max_states = static_cast<std::size_t>(
     require_non_negative_int(node, KEY_MAX_STATES, static_cast<int>(defaults.hybrid_max_states)));
   parameters.hybrid_corridor_margin_cells = require_non_negative_int(

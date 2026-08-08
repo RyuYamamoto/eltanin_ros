@@ -111,7 +111,12 @@ ConversionStatus validate_hybrid(const eltanin::planner::HybridAStarParams & hyb
   if (!change.ok()) {
     return change;
   }
-  return require_finite_positive(KEY_ANALYTIC_EXPANSION_RATIO, hybrid.analytic_expansion_ratio);
+  const ConversionStatus ratio =
+    require_finite_positive(KEY_ANALYTIC_EXPANSION_RATIO, hybrid.analytic_expansion_ratio);
+  if (!ratio.ok()) {
+    return ratio;
+  }
+  return require_finite_non_negative(KEY_HEURISTIC_WEIGHT, hybrid.heuristic_weight);
 }
 
 }  // namespace

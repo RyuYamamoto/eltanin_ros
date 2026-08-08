@@ -57,6 +57,10 @@ global_path_planner:
       # the follower, which is what a robot that can turn in place wants. false demands the exact
       # goal yaw and reports unreachable when no forward-only arc can enter it.
       free_goal_yaw: true
+      # Weight on the distance-over-cells heuristic. Above about 0.9 the search goes greedy and
+      # the path weaves; 1.0 is roughly 25x faster on a long plan but visibly worse
+      # (eltanin docs/planner-design.md 13.16).
+      heuristic_weight: 0.8
       steering_penalty: 0.05
       # Has almost no effect at the default motion_step (eltanin docs/planner-design.md 13.7).
       steering_change_penalty: 0.10

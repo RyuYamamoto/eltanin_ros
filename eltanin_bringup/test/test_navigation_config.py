@@ -65,6 +65,7 @@ EXPECTED = {
             "dubins_expansion_distance": float,
             "analytic_expansion_ratio": float,
             "free_goal_yaw": bool,
+            "heuristic_weight": float,
             "steering_penalty": float,
             "steering_change_penalty": float,
             "max_expansions": int,
