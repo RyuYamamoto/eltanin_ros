@@ -156,7 +156,7 @@ TEST(PlannerParametersTest, TheHybridDefaultsAreEltaninsOwnDefaults)
   EXPECT_DOUBLE_EQ(parameters.hybrid.steering_change_penalty, 0.10);
   EXPECT_EQ(parameters.hybrid.max_expansions, 4000000u);
   EXPECT_DOUBLE_EQ(parameters.hybrid.analytic_expansion_ratio, 1.0);
-  EXPECT_FALSE(parameters.hybrid.free_goal_yaw);
+  EXPECT_EQ(parameters.hybrid.motion_model, eltanin::planner::MotionModel::Dubins);
   EXPECT_DOUBLE_EQ(parameters.hybrid.heuristic_weight, 0.8);
   EXPECT_FALSE(parameters.publish_footprint_path);
   EXPECT_EQ(parameters.footprint_marker_stride, 10);

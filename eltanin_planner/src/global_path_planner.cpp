@@ -89,6 +89,19 @@ int require_non_negative_int(rclcpp::Node & node, const char * key, int fallback
   return value;
 }
 
+eltanin::planner::MotionModel require_motion_model(
+  rclcpp::Node & node, eltanin::planner::MotionModel fallback)
+{
+  const auto name = require_parameter<std::string>(node, KEY_MOTION_MODEL, name_of(fallback));
+  const std::optional<eltanin::planner::MotionModel> model = to_motion_model(name);
+  if (!model.has_value()) {
+    refuse_to_start(
+      node,
+      diagnostic::rejected(KEY_MOTION_MODEL, "is '" + name + "', not 'dubins' or 'differential'"));
+  }
+  return *model;
+}
+
 PlannerType require_planner_type(rclcpp::Node & node, PlannerType fallback)
 {
   const auto name = require_parameter<std::string>(node, KEY_PLANNER_TYPE, name_of(fallback));
@@ -131,8 +144,7 @@ PlannerParameters require_parameters(rclcpp::Node & node)
     node, KEY_MAX_EXPANSIONS, static_cast<int>(defaults.hybrid.max_expansions)));
   parameters.hybrid.analytic_expansion_ratio =
     require_parameter(node, KEY_ANALYTIC_EXPANSION_RATIO, defaults.hybrid.analytic_expansion_ratio);
-  parameters.hybrid.free_goal_yaw =
-    require_parameter(node, KEY_FREE_GOAL_YAW, defaults.hybrid.free_goal_yaw);
+  parameters.hybrid.motion_model = require_motion_model(node, defaults.hybrid.motion_model);
   parameters.hybrid.heuristic_weight =
     require_parameter(node, KEY_HEURISTIC_WEIGHT, defaults.hybrid.heuristic_weight);
   parameters.hybrid_max_states = static_cast<std::size_t>(

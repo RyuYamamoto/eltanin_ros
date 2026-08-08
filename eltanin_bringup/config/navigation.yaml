@@ -53,10 +53,11 @@ global_path_planner:
       # Beyond that, it is tried every (cells to goal / this) nodes. Raising it above 1.0 tries
       # more often and measurably worsens detours (eltanin docs/planner-design.md 13.12).
       analytic_expansion_ratio: 1.0
-      # true reaches the goal position at whatever heading gets there and leaves the final turn to
-      # the follower, which is what a robot that can turn in place wants. false demands the exact
-      # goal yaw and reports unreachable when no forward-only arc can enter it.
-      free_goal_yaw: true
+      # dubins is forward arcs only, for a car. differential adds turning on the spot, which is
+      # what this robot does; the returned path then contains poses that share a position.
+      # On the reference map a requested goal heading is reachable in 3 of 8 directions under
+      # dubins and in 8 of 8 under differential (eltanin docs/planner-design.md 13.15).
+      motion_model: differential
       # Weight on the distance-over-cells heuristic. Above about 0.9 the search goes greedy and
       # the path weaves; 1.0 is roughly 25x faster on a long plan but visibly worse
       # (eltanin docs/planner-design.md 13.16).

@@ -121,6 +121,22 @@ ConversionStatus validate_hybrid(const eltanin::planner::HybridAStarParams & hyb
 
 }  // namespace
 
+const char * name_of(eltanin::planner::MotionModel model) noexcept
+{
+  return model == eltanin::planner::MotionModel::Differential ? "differential" : "dubins";
+}
+
+std::optional<eltanin::planner::MotionModel> to_motion_model(std::string_view name) noexcept
+{
+  if (name == "dubins") {
+    return eltanin::planner::MotionModel::Dubins;
+  }
+  if (name == "differential") {
+    return eltanin::planner::MotionModel::Differential;
+  }
+  return std::nullopt;
+}
+
 const char * name_of(PlannerType type) noexcept
 {
   return type == PlannerType::HybridAStar ? "hybrid_astar" : "astar";

@@ -47,7 +47,7 @@ inline constexpr const char * KEY_STEERING_PENALTY = "hybrid.steering_penalty";
 inline constexpr const char * KEY_STEERING_CHANGE_PENALTY = "hybrid.steering_change_penalty";
 inline constexpr const char * KEY_MAX_EXPANSIONS = "hybrid.max_expansions";
 inline constexpr const char * KEY_ANALYTIC_EXPANSION_RATIO = "hybrid.analytic_expansion_ratio";
-inline constexpr const char * KEY_FREE_GOAL_YAW = "hybrid.free_goal_yaw";
+inline constexpr const char * KEY_MOTION_MODEL = "hybrid.motion_model";
 inline constexpr const char * KEY_HEURISTIC_WEIGHT = "hybrid.heuristic_weight";
 inline constexpr const char * KEY_MAX_STATES = "hybrid.max_states";
 inline constexpr const char * KEY_CORRIDOR_MARGIN_CELLS = "hybrid.corridor_margin_cells";
@@ -60,6 +60,12 @@ const char * name_of(PlannerType type) noexcept;
 
 /// The inverse; nullopt for a name nobody defined.
 std::optional<PlannerType> to_planner_type(std::string_view name) noexcept;
+
+/// The parameter spelling of the control set the vehicle is allowed to use.
+const char * name_of(eltanin::planner::MotionModel model) noexcept;
+
+/// The inverse; nullopt for a name nobody defined.
+std::optional<eltanin::planner::MotionModel> to_motion_model(std::string_view name) noexcept;
 
 /// eltanin's own parameter structs are held by value, so the two sets of defaults cannot drift.
 struct PlannerParameters
