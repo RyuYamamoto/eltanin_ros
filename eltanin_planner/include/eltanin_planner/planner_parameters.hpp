@@ -46,6 +46,7 @@ inline constexpr const char * KEY_DUBINS_EXPANSION_DISTANCE = "hybrid.dubins_exp
 inline constexpr const char * KEY_STEERING_PENALTY = "hybrid.steering_penalty";
 inline constexpr const char * KEY_STEERING_CHANGE_PENALTY = "hybrid.steering_change_penalty";
 inline constexpr const char * KEY_MAX_EXPANSIONS = "hybrid.max_expansions";
+inline constexpr const char * KEY_ANALYTIC_EXPANSION_RATIO = "hybrid.analytic_expansion_ratio";
 inline constexpr const char * KEY_MAX_STATES = "hybrid.max_states";
 
 /// Which search runs. Both go through the same Planner::plan(), so the failure classes are shared.
@@ -69,7 +70,8 @@ struct PlannerParameters
   double tf_lookup_timeout{0.1};
   bool publish_footprint_path{false};
   int footprint_marker_stride{10};
-  /// Ceiling on cells * heading_bins; eltanin allocates the whole state space before searching.
+  /// Ceiling on cells * heading_bins. eltanin refuses oversized problems itself now, but this
+  /// keeps the rejection on the ROS side where it can name the map.
   std::size_t hybrid_max_states{20000000};
 };
 

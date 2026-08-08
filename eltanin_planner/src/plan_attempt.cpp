@@ -71,6 +71,27 @@ std::string describe_cell(const char * what, const MapIndex & index)
          ")";
 }
 
+/// eltanin classifies the search failure itself now; only the ones it can reach are mapped.
+PlanFailure failure_of(eltanin::planner::PlannerError error) noexcept
+{
+  switch (error) {
+    case eltanin::planner::PlannerError::StateSpaceTooLarge:
+      return PlanFailure::StateSpaceTooLarge;
+    case eltanin::planner::PlannerError::StartOutsideMap:
+      return PlanFailure::StartOutsideMap;
+    case eltanin::planner::PlannerError::GoalOutsideMap:
+      return PlanFailure::GoalOutsideMap;
+    case eltanin::planner::PlannerError::GoalBlocked:
+      return PlanFailure::GoalNotFree;
+    case eltanin::planner::PlannerError::StartRescueFailed:
+      return PlanFailure::StartNotRescuable;
+    case eltanin::planner::PlannerError::InvalidMap:
+      return PlanFailure::MapUnusable;
+    default:
+      return PlanFailure::SearchFailed;
+  }
+}
+
 PlanAttempt fail(PlanFailure failure, std::string message)
 {
   return PlanAttempt{eltanin::Path{}, failure, std::move(message)};
@@ -80,8 +101,8 @@ PlanAttempt fail(PlanFailure failure, std::string message)
 int search_radius(const PlannerParameters & parameters) noexcept
 {
   return parameters.planner_type == PlannerType::HybridAStar
-           ? parameters.hybrid.start_search_radius_cells
-           : parameters.astar.start_search_radius_cells;
+           ? parameters.hybrid.common.start_search_radius_cells
+           : parameters.astar.common.start_search_radius_cells;
 }
 
 }  // namespace
@@ -177,19 +198,20 @@ PlanAttempt attempt_plan(
     }
   }
 
-  std::optional<eltanin::Path> path =
+  const eltanin::planner::PlanResult result =
     parameters.planner_type == PlannerType::HybridAStar
       ? eltanin::planner::plan_hybrid_astar(costmap, model, start, goal, parameters.hybrid)
-      : eltanin::planner::plan(costmap, model, start, goal, parameters.astar);
-  if (!path.has_value()) {
+      : eltanin::planner::plan_astar(costmap, model, start, goal, parameters.astar);
+  if (!result) {
     return fail(
-      PlanFailure::SearchFailed,
+      failure_of(result.error()),
       diagnostic::line(
         "no path from " + describe_cell("start", *start_cell) + " to " +
         describe_cell("goal", *goal_cell) + " with " + name_of(parameters.planner_type) +
-        " on the " + describe_map(geometry)));
+        " on the " + describe_map(geometry) + ": " + eltanin::planner::to_string(result.error())));
   }
-  if (path->empty()) {
+  const eltanin::Path & path = *result;
+  if (path.empty()) {
     return fail(
       PlanFailure::EmptyPath,
       diagnostic::line(
@@ -198,9 +220,9 @@ PlanAttempt attempt_plan(
   }
 
   const std::string message = diagnostic::line(
-    std::string(name_of(parameters.planner_type)) + " planned " + std::to_string(path->size()) +
-    " poses, " + std::to_string(eltanin::path_length(*path)) + " m");
-  return PlanAttempt{std::move(*path), PlanFailure::None, message};
+    std::string(name_of(parameters.planner_type)) + " planned " + std::to_string(path.size()) +
+    " poses, " + std::to_string(eltanin::path_length(path)) + " m");
+  return PlanAttempt{path, PlanFailure::None, message};
 }
 
 }  // namespace eltanin_planner

@@ -74,7 +74,7 @@ ConversionStatus require_non_negative(const char * key, int value)
 ConversionStatus validate_hybrid(const eltanin::planner::HybridAStarParams & hybrid)
 {
   const ConversionStatus radius_cells =
-    require_non_negative(KEY_START_SEARCH_RADIUS_CELLS, hybrid.start_search_radius_cells);
+    require_non_negative(KEY_START_SEARCH_RADIUS_CELLS, hybrid.common.start_search_radius_cells);
   if (!radius_cells.ok()) {
     return radius_cells;
   }
@@ -106,7 +106,12 @@ ConversionStatus validate_hybrid(const eltanin::planner::HybridAStarParams & hyb
   if (!steering.ok()) {
     return steering;
   }
-  return require_finite_non_negative(KEY_STEERING_CHANGE_PENALTY, hybrid.steering_change_penalty);
+  const ConversionStatus change =
+    require_finite_non_negative(KEY_STEERING_CHANGE_PENALTY, hybrid.steering_change_penalty);
+  if (!change.ok()) {
+    return change;
+  }
+  return require_finite_positive(KEY_ANALYTIC_EXPANSION_RATIO, hybrid.analytic_expansion_ratio);
 }
 
 }  // namespace
@@ -129,8 +134,8 @@ std::optional<PlannerType> to_planner_type(std::string_view name) noexcept
 
 ConversionStatus validate(const PlannerParameters & parameters)
 {
-  const ConversionStatus radius =
-    require_non_negative(KEY_START_SEARCH_RADIUS_CELLS, parameters.astar.start_search_radius_cells);
+  const ConversionStatus radius = require_non_negative(
+    KEY_START_SEARCH_RADIUS_CELLS, parameters.astar.common.start_search_radius_cells);
   if (!radius.ok()) {
     return radius;
   }

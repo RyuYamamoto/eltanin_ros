@@ -172,7 +172,7 @@ TEST(AttemptPlanTest, RejectsAStartWithNoFreeCellWithinTheSearchRadius)
     }
   }
   PlannerParameters parameters;
-  parameters.astar.start_search_radius_cells = 2;
+  parameters.astar.common.start_search_radius_cells = 2;
   const auto attempt =
     attempt_plan(costmap, make_model(), at_cell(costmap, 1, 1), at_cell(costmap, 8, 8), parameters);
   EXPECT_EQ(attempt.failure, PlanFailure::StartNotRescuable);
@@ -202,7 +202,7 @@ TEST(AttemptPlanTest, AStartSearchRadiusOfZeroDisablesTheRescue)
   eltanin::map::Costmap costmap = make_costmap();
   ASSERT_TRUE(costmap.set(2, 2, LETHAL_OBSTACLE));
   PlannerParameters parameters;
-  parameters.astar.start_search_radius_cells = 0;
+  parameters.astar.common.start_search_radius_cells = 0;
   const auto attempt =
     attempt_plan(costmap, make_model(), at_cell(costmap, 2, 2), at_cell(costmap, 8, 8), parameters);
   EXPECT_EQ(attempt.failure, PlanFailure::StartNotRescuable);
@@ -327,9 +327,9 @@ TEST(AttemptPlanHybridTest, UsesItsOwnStartSearchRadius)
   eltanin::map::Costmap costmap = make_costmap();
   ASSERT_TRUE(costmap.set(2, 2, LETHAL_OBSTACLE));
   PlannerParameters parameters = hybrid_parameters();
-  parameters.hybrid.start_search_radius_cells = 0;
+  parameters.hybrid.common.start_search_radius_cells = 0;
   // The A* radius stays at its default, so a shared lookup would rescue the start by mistake.
-  ASSERT_EQ(parameters.astar.start_search_radius_cells, 8);
+  ASSERT_EQ(parameters.astar.common.start_search_radius_cells, 8);
   const auto attempt =
     attempt_plan(costmap, make_model(), at_cell(costmap, 2, 2), at_cell(costmap, 8, 8), parameters);
   EXPECT_EQ(attempt.failure, PlanFailure::StartNotRescuable);

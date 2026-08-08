@@ -109,9 +109,10 @@ PlannerParameters require_parameters(rclcpp::Node & node)
   PlannerParameters parameters;
   parameters.planner_type = require_planner_type(node, defaults.planner_type);
   // One key for a radius both searches take, so the two cannot be given different values.
-  parameters.astar.start_search_radius_cells =
-    require_int(node, KEY_START_SEARCH_RADIUS_CELLS, defaults.astar.start_search_radius_cells);
-  parameters.hybrid.start_search_radius_cells = parameters.astar.start_search_radius_cells;
+  parameters.astar.common.start_search_radius_cells = require_int(
+    node, KEY_START_SEARCH_RADIUS_CELLS, defaults.astar.common.start_search_radius_cells);
+  parameters.hybrid.common.start_search_radius_cells =
+    parameters.astar.common.start_search_radius_cells;
   parameters.hybrid.heading_bins =
     require_int(node, KEY_HEADING_BINS, defaults.hybrid.heading_bins);
   parameters.hybrid.minimum_turning_radius =
@@ -128,6 +129,8 @@ PlannerParameters require_parameters(rclcpp::Node & node)
     require_parameter(node, KEY_STEERING_CHANGE_PENALTY, defaults.hybrid.steering_change_penalty);
   parameters.hybrid.max_expansions = static_cast<std::size_t>(require_non_negative_int(
     node, KEY_MAX_EXPANSIONS, static_cast<int>(defaults.hybrid.max_expansions)));
+  parameters.hybrid.analytic_expansion_ratio =
+    require_parameter(node, KEY_ANALYTIC_EXPANSION_RATIO, defaults.hybrid.analytic_expansion_ratio);
   parameters.hybrid_max_states = static_cast<std::size_t>(
     require_non_negative_int(node, KEY_MAX_STATES, static_cast<int>(defaults.hybrid_max_states)));
   parameters.smoother.weight_data =
@@ -140,6 +143,12 @@ PlannerParameters require_parameters(rclcpp::Node & node)
     require_int(node, KEY_SMOOTHER_MAX_ITERATIONS, defaults.smoother.max_iterations);
   parameters.publish_raw_path =
     require_parameter(node, KEY_PUBLISH_RAW_PATH, defaults.publish_raw_path);
+  // Only publish_raw_path needs the two-step form; plan_astar() reuses the grid it already built.
+  if (parameters.publish_raw_path) {
+    parameters.astar.smoother.reset();
+  } else {
+    parameters.astar.smoother = parameters.smoother;
+  }
   parameters.unknown_is_free =
     require_parameter(node, KEY_UNKNOWN_IS_FREE, defaults.unknown_is_free);
   parameters.tf_lookup_timeout =
@@ -425,11 +434,12 @@ void GlobalPathPlanner::execute(const std::shared_ptr<GoalHandle> & handle)
     return;
   }
 
-  // Smoothing a Hybrid A* path would pull its points off the curvature it was built to respect.
+  // Hybrid A* is never smoothed; A* already is, unless the raw path is being published.
+  const bool smooth_here =
+    parameters_.planner_type == PlannerType::AStar && parameters_.publish_raw_path;
   const eltanin::Path smoothed =
-    parameters_.planner_type == PlannerType::HybridAStar
-      ? attempt.path
-      : eltanin::planner::smooth(attempt.path, *costmap, model_, parameters_.smoother);
+    smooth_here ? eltanin::planner::smooth(attempt.path, *costmap, model_, parameters_.smoother)
+                : attempt.path;
   const auto smoothing_finished = std::chrono::steady_clock::now();
 
   if (interrupted(handle)) {

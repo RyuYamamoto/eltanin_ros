@@ -48,9 +48,9 @@ constexpr double NOT_A_NUMBER = std::numeric_limits<double>::quiet_NaN();
 TEST(PlannerParametersTest, TheDefaultsAreEltaninsOwnDefaults)
 {
   const PlannerParameters parameters;
-  EXPECT_EQ(parameters.astar.start_search_radius_cells, 8);
-  EXPECT_DOUBLE_EQ(parameters.smoother.weight_data, 0.5);
-  EXPECT_DOUBLE_EQ(parameters.smoother.weight_smooth, 0.3);
+  EXPECT_EQ(parameters.astar.common.start_search_radius_cells, 8);
+  EXPECT_DOUBLE_EQ(parameters.smoother.weight_data, 0.1);
+  EXPECT_DOUBLE_EQ(parameters.smoother.weight_smooth, 0.4);
   EXPECT_DOUBLE_EQ(parameters.smoother.tolerance, 1e-4);
   EXPECT_EQ(parameters.smoother.max_iterations, 100);
   EXPECT_FALSE(parameters.publish_raw_path);
@@ -67,14 +67,14 @@ TEST(PlannerParametersTest, TheDefaultsAreAccepted)
 TEST(PlannerParametersTest, RejectsANegativeStartSearchRadius)
 {
   PlannerParameters parameters;
-  parameters.astar.start_search_radius_cells = -1;
+  parameters.astar.common.start_search_radius_cells = -1;
   EXPECT_TRUE(rejects(validate(parameters).message(), "start_search_radius_cells"));
 }
 
 TEST(PlannerParametersTest, AcceptsAZeroStartSearchRadiusWhichDisablesTheRescue)
 {
   PlannerParameters parameters;
-  parameters.astar.start_search_radius_cells = 0;
+  parameters.astar.common.start_search_radius_cells = 0;
   EXPECT_TRUE(validate(parameters).ok());
 }
 
@@ -146,7 +146,7 @@ TEST(PlannerParametersTest, TheHybridDefaultsAreEltaninsOwnDefaults)
 {
   const PlannerParameters parameters;
   EXPECT_EQ(parameters.planner_type, eltanin_planner::PlannerType::AStar);
-  EXPECT_EQ(parameters.hybrid.start_search_radius_cells, 8);
+  EXPECT_EQ(parameters.hybrid.common.start_search_radius_cells, 8);
   EXPECT_EQ(parameters.hybrid.heading_bins, 72);
   EXPECT_DOUBLE_EQ(parameters.hybrid.minimum_turning_radius, 0.4);
   EXPECT_DOUBLE_EQ(parameters.hybrid.motion_step, 0.0);
@@ -154,7 +154,8 @@ TEST(PlannerParametersTest, TheHybridDefaultsAreEltaninsOwnDefaults)
   EXPECT_DOUBLE_EQ(parameters.hybrid.dubins_expansion_distance, 1.0);
   EXPECT_DOUBLE_EQ(parameters.hybrid.steering_penalty, 0.05);
   EXPECT_DOUBLE_EQ(parameters.hybrid.steering_change_penalty, 0.10);
-  EXPECT_EQ(parameters.hybrid.max_expansions, 0u);
+  EXPECT_EQ(parameters.hybrid.max_expansions, 4000000u);
+  EXPECT_DOUBLE_EQ(parameters.hybrid.analytic_expansion_ratio, 1.0);
   EXPECT_FALSE(parameters.publish_footprint_path);
   EXPECT_EQ(parameters.footprint_marker_stride, 10);
   EXPECT_EQ(parameters.hybrid_max_states, 20000000u);
@@ -229,7 +230,7 @@ TEST(PlannerParametersTest, RejectsAStateSpaceCeilingOfZero)
 TEST(PlannerParametersTest, ReportsOnlyTheFirstViolatedCondition)
 {
   PlannerParameters parameters;
-  parameters.astar.start_search_radius_cells = -1;
+  parameters.astar.common.start_search_radius_cells = -1;
   parameters.smoother.weight_data = -1.0;
   parameters.tf_lookup_timeout = -1.0;
   const std::string message = validate(parameters).message();

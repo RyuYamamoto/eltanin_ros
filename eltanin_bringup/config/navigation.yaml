@@ -21,9 +21,11 @@ global_path_planner:
     # Both searches take it, so it is written once.
     start_search_radius_cells: 8
     # weight_data + 4 * weight_smooth must stay below 2 or the smoother diverges; the node
-    # refuses to start otherwise.
-    weight_data: 0.5
-    weight_smooth: 0.3
+    # refuses to start otherwise. Keeping weight_data + 2 * weight_smooth <= 1 additionally makes
+    # every update a convex combination, which is what stops an A* staircase from surviving
+    # smoothing (eltanin docs/planner-design.md 8.3 / 13.14).
+    weight_data: 0.1
+    weight_smooth: 0.4
     smoother_tolerance: 0.0001
     smoother_max_iterations: 100
     # Publishes /global_path_planner/global_path_raw, the path before smoothing.
@@ -41,15 +43,22 @@ global_path_planner:
     hybrid:
       heading_bins: 72
       minimum_turning_radius: 0.4
-      # 0 selects one map cell.
+      # 0 selects sqrt(2) * resolution. The left-right reversal count in the output is dominated
+      # by this value, not by steering_change_penalty (eltanin docs/planner-design.md 13.9).
       motion_step: 0.0
       # 0 selects half a map cell.
       collision_check_step: 0.0
+      # Dubins connection is tried at every node inside this distance from the goal.
       dubins_expansion_distance: 1.0
+      # Beyond that, it is tried every (cells to goal / this) nodes. Raising it above 1.0 tries
+      # more often and measurably worsens detours (eltanin docs/planner-design.md 13.12).
+      analytic_expansion_ratio: 1.0
       steering_penalty: 0.05
+      # Has almost no effect at the default motion_step (eltanin docs/planner-design.md 13.7).
       steering_change_penalty: 0.10
-      # 0 allows the complete discretized state space to be expanded.
-      max_expansions: 0
+      # 0 would allow the complete discretized state space to be expanded, so an unreachable goal
+      # costs the whole reachable half; this is eltanin's own bound on that.
+      max_expansions: 4000000
       # Ceiling on cells * heading_bins. The search sizes its arrays from the whole state
       # space before it expands anything, so a 4000x4000 map at 72 bins needs tens of GB and
       # takes the machine down; above this the plan is refused in one line instead.
