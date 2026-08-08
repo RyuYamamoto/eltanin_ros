@@ -40,6 +40,11 @@ ARGUMENTS = [
     ),
     DeclareLaunchArgument("use_rviz", default_value="true", description="Start RViz."),
     DeclareLaunchArgument(
+        "use_goal_pose_relay",
+        default_value="true",
+        description="Forward RViz's /goal_pose to the planner action, so 2D Goal Pose plans.",
+    ),
+    DeclareLaunchArgument(
         "map",
         default_value="",
         description="Map yaml for nav2_map_server. Empty means no map_server: /map then comes "
@@ -153,6 +158,19 @@ def generate_launch_description():
         condition=have_map(),
     )
 
+    goal_pose_relay = Node(
+        package="eltanin_bringup",
+        executable="goal_pose_relay",
+        name="goal_pose_relay",
+        parameters=[{"use_sim_time": use_sim_time}],
+        remappings=[
+            ("goal_pose", "/goal_pose"),
+            ("compute_path_to_pose", "/global_path_planner/compute_path_to_pose"),
+        ],
+        output="screen",
+        condition=IfCondition(LaunchConfiguration("use_goal_pose_relay")),
+    )
+
     rviz = Node(
         package="rviz2",
         executable="rviz2",
@@ -170,6 +188,7 @@ def generate_launch_description():
             activate_map_server,
             container,
             *separate_nodes,
+            goal_pose_relay,
             rviz,
         ]
     )

@@ -6,6 +6,11 @@ find_package(ament_cmake REQUIRED)
 
 install(DIRECTORY config launch rviz DESTINATION share/${PROJECT_NAME})
 
+# RENAME so that the launch file names an executable, not a file with an extension.
+install(PROGRAMS scripts/goal_pose_relay.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME goal_pose_relay)
+
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   # Fences over the configuration itself: none of what they check fails at startup.

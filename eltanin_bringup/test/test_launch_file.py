@@ -33,6 +33,7 @@ EXPECTED_ARGUMENTS = {
     "use_sim_time",
     "use_composition",
     "use_rviz",
+    "use_goal_pose_relay",
     "map",
     "params_file",
     "rviz_config",
