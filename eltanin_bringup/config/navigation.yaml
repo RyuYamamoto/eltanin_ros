@@ -53,6 +53,10 @@ global_path_planner:
       # Beyond that, it is tried every (cells to goal / this) nodes. Raising it above 1.0 tries
       # more often and measurably worsens detours (eltanin docs/planner-design.md 13.12).
       analytic_expansion_ratio: 1.0
+      # true reaches the goal position at whatever heading gets there and leaves the final turn to
+      # the follower, which is what a robot that can turn in place wants. false demands the exact
+      # goal yaw and reports unreachable when no forward-only arc can enter it.
+      free_goal_yaw: true
       steering_penalty: 0.05
       # Has almost no effect at the default motion_step (eltanin docs/planner-design.md 13.7).
       steering_change_penalty: 0.10

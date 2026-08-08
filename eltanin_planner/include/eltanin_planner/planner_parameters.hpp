@@ -47,6 +47,7 @@ inline constexpr const char * KEY_STEERING_PENALTY = "hybrid.steering_penalty";
 inline constexpr const char * KEY_STEERING_CHANGE_PENALTY = "hybrid.steering_change_penalty";
 inline constexpr const char * KEY_MAX_EXPANSIONS = "hybrid.max_expansions";
 inline constexpr const char * KEY_ANALYTIC_EXPANSION_RATIO = "hybrid.analytic_expansion_ratio";
+inline constexpr const char * KEY_FREE_GOAL_YAW = "hybrid.free_goal_yaw";
 inline constexpr const char * KEY_MAX_STATES = "hybrid.max_states";
 inline constexpr const char * KEY_CORRIDOR_MARGIN_CELLS = "hybrid.corridor_margin_cells";
 
