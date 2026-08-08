@@ -351,3 +351,47 @@ TEST(AttemptPlanTest, DISABLED_PlanScale)
 }
 
 }  // namespace
+
+TEST(AttemptPlanHybridTest, SearchesACorridorSoALargeMapStillPlans)
+{
+  // 800 * 800 * 72 is 46e6 states, far above the default ceiling; the corridor is what fits.
+  const eltanin::map::Costmap costmap = make_costmap(800, 800);
+  const PlannerParameters parameters = hybrid_parameters();
+  ASSERT_GT(
+    costmap.cell_count() * static_cast<std::size_t>(parameters.hybrid.heading_bins),
+    parameters.hybrid_max_states);
+
+  const auto attempt = attempt_plan(
+    costmap, make_model(), at_cell(costmap, 20, 400), at_cell(costmap, 780, 400), parameters);
+
+  ASSERT_TRUE(attempt.ok()) << attempt.message;
+  EXPECT_FALSE(attempt.path.empty());
+}
+
+TEST(AttemptPlanHybridTest, NamesTheCorridorMarginWhenTheCorridorItselfIsTooLarge)
+{
+  const eltanin::map::Costmap costmap = make_costmap(800, 800);
+  PlannerParameters parameters = hybrid_parameters();
+  parameters.hybrid_max_states = 1000;
+
+  const auto attempt = attempt_plan(
+    costmap, make_model(), at_cell(costmap, 20, 400), at_cell(costmap, 780, 400), parameters);
+
+  EXPECT_EQ(attempt.failure, PlanFailure::StateSpaceTooLarge);
+  EXPECT_NE(attempt.message.find("corridor cells"), std::string::npos) << attempt.message;
+  EXPECT_NE(attempt.message.find("corridor_margin_cells"), std::string::npos) << attempt.message;
+}
+
+TEST(AttemptPlanHybridTest, ReportsWhenTheAStarGuideItselfFindsNothing)
+{
+  eltanin::map::Costmap split = make_costmap(60, 60);
+  for (int my = 0; my < split.size_y(); ++my) {
+    ASSERT_TRUE(split.set(30, my, LETHAL_OBSTACLE));
+  }
+
+  const auto attempt = attempt_plan(
+    split, make_model(), at_cell(split, 5, 30), at_cell(split, 55, 30), hybrid_parameters());
+
+  EXPECT_EQ(attempt.failure, PlanFailure::SearchFailed);
+  EXPECT_NE(attempt.message.find("A* guide"), std::string::npos) << attempt.message;
+}

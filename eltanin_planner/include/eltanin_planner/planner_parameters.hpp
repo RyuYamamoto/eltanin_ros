@@ -48,6 +48,7 @@ inline constexpr const char * KEY_STEERING_CHANGE_PENALTY = "hybrid.steering_cha
 inline constexpr const char * KEY_MAX_EXPANSIONS = "hybrid.max_expansions";
 inline constexpr const char * KEY_ANALYTIC_EXPANSION_RATIO = "hybrid.analytic_expansion_ratio";
 inline constexpr const char * KEY_MAX_STATES = "hybrid.max_states";
+inline constexpr const char * KEY_CORRIDOR_MARGIN_CELLS = "hybrid.corridor_margin_cells";
 
 /// Which search runs. Both go through the same Planner::plan(), so the failure classes are shared.
 enum class PlannerType { AStar, HybridAStar };
@@ -73,6 +74,8 @@ struct PlannerParameters
   /// Ceiling on cells * heading_bins. eltanin refuses oversized problems itself now, but this
   /// keeps the rejection on the ROS side where it can name the map.
   std::size_t hybrid_max_states{20000000};
+  /// Half width of the corridor Hybrid A* searches around the raw A* guide [cells].
+  int hybrid_corridor_margin_cells{30};
 };
 
 /// The first violated condition only; both searches are checked whichever one is selected.

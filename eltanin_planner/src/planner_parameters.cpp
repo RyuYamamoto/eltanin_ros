@@ -180,6 +180,11 @@ ConversionStatus validate(const PlannerParameters & parameters)
   if (!stride.ok()) {
     return stride;
   }
+  const ConversionStatus margin =
+    require_non_negative(KEY_CORRIDOR_MARGIN_CELLS, parameters.hybrid_corridor_margin_cells);
+  if (!margin.ok()) {
+    return margin;
+  }
   if (parameters.hybrid_max_states == 0) {
     return ConversionStatus::failure(
       diagnostic::rejected(KEY_MAX_STATES, "is 0, which allows no state at all"));

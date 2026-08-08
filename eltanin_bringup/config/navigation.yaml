@@ -16,7 +16,7 @@ global_path_planner:
   ros__parameters:
     # astar or hybrid_astar. hybrid_astar plans in (x, y, yaw) and respects a turning radius; its
     # result is published unsmoothed, because the smoother would pull it off that curvature.
-    planner_type: astar
+    planner_type: hybrid_astar
     # Chebyshev radius used to nudge a blocked start onto a free cell; 0 disables the rescue.
     # Both searches take it, so it is written once.
     start_search_radius_cells: 8
@@ -59,7 +59,9 @@ global_path_planner:
       # 0 would allow the complete discretized state space to be expanded, so an unreachable goal
       # costs the whole reachable half; this is eltanin's own bound on that.
       max_expansions: 4000000
-      # Ceiling on cells * heading_bins. The search sizes its arrays from the whole state
-      # space before it expands anything, so a 4000x4000 map at 72 bins needs tens of GB and
-      # takes the machine down; above this the plan is refused in one line instead.
+      # Hybrid A* searches a corridor around a raw A* guide, not the whole map. This is the
+      # half width of that corridor in cells; 30 is 1.5 m at 0.05 m.
+      corridor_margin_cells: 30
+      # Ceiling on corridor cells * heading_bins. Above this the plan is refused in one line
+      # rather than the search allocating tens of GB.
       max_states: 20000000

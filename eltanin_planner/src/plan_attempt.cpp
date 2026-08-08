@@ -16,6 +16,7 @@
 
 #include "src/diagnostic.hpp"
 
+#include <eltanin/map/crop.hpp>
 #include <eltanin/planner/astar_planner.hpp>
 #include <eltanin/planner/hybrid_astar_planner.hpp>
 #include <eltanin/planner/traversable_search.hpp>
@@ -27,6 +28,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace eltanin_planner
 {
@@ -182,25 +184,55 @@ PlanAttempt attempt_plan(
         "no Free cell within start_search_radius_cells " + std::to_string(radius)));
   }
 
+  std::optional<eltanin::map::Costmap> corridor;
   if (parameters.planner_type == PlannerType::HybridAStar) {
+    // Hybrid A* sizes its arrays from the whole map, so it searches a corridor around a raw A*
+    // guide instead (eltanin docs/planner-design.md 13.7).
+    eltanin::planner::AStarParams guide_params = parameters.astar;
+    guide_params.smoother.reset();
+    const eltanin::planner::PlanResult guide =
+      eltanin::planner::plan_astar(costmap, model, start, goal, guide_params);
+    if (!guide) {
+      return fail(
+        failure_of(guide.error()),
+        diagnostic::line(
+          "no hybrid_astar corridor from " + describe_cell("start", *start_cell) + " to " +
+          describe_cell("goal", *goal_cell) + " on the " + describe_map(geometry) +
+          ": the A* guide failed with " + eltanin::planner::to_string(guide.error())));
+    }
+    std::vector<Eigen::Vector2d> positions;
+    positions.reserve(guide->size());
+    for (const eltanin::Pose2D & pose : *guide) {
+      positions.push_back(pose.position);
+    }
+    corridor =
+      eltanin::map::crop_around(costmap, positions, parameters.hybrid_corridor_margin_cells);
+    if (!corridor.has_value()) {
+      return fail(
+        PlanFailure::SearchFailed,
+        diagnostic::line(
+          "the A* guide left no cell of the " + describe_map(geometry) + " to crop"));
+    }
+
     const std::size_t states =
-      costmap.cell_count() * static_cast<std::size_t>(parameters.hybrid.heading_bins);
+      corridor->cell_count() * static_cast<std::size_t>(parameters.hybrid.heading_bins);
     if (states > parameters.hybrid_max_states) {
       return fail(
         PlanFailure::StateSpaceTooLarge,
         diagnostic::rejected(
           "the hybrid_astar state space",
-          std::to_string(costmap.cell_count()) + " cells x " +
+          std::to_string(corridor->cell_count()) + " corridor cells x " +
             std::to_string(parameters.hybrid.heading_bins) + " heading bins is " +
             std::to_string(states) + " states, above hybrid.max_states " +
             std::to_string(parameters.hybrid_max_states) +
-            "; the search allocates all of them before it expands anything"));
+            "; raise it or lower hybrid.corridor_margin_cells " +
+            std::to_string(parameters.hybrid_corridor_margin_cells)));
     }
   }
 
   const eltanin::planner::PlanResult result =
     parameters.planner_type == PlannerType::HybridAStar
-      ? eltanin::planner::plan_hybrid_astar(costmap, model, start, goal, parameters.hybrid)
+      ? eltanin::planner::plan_hybrid_astar(*corridor, model, start, goal, parameters.hybrid)
       : eltanin::planner::plan_astar(costmap, model, start, goal, parameters.astar);
   if (!result) {
     return fail(

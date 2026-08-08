@@ -67,6 +67,7 @@ EXPECTED = {
             "steering_penalty": float,
             "steering_change_penalty": float,
             "max_expansions": int,
+            "corridor_margin_cells": int,
             "max_states": int,
         },
     },
