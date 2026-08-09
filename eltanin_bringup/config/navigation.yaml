@@ -40,6 +40,11 @@ global_path_planner:
     footprint_marker_stride: 2
 
     # Only read when planner_type is hybrid_astar, but validated at startup either way.
+    # Extra cost per metre travelled near a wall, falling to zero at clearance_distance. The A*
+    # path is also what crops the corridor hybrid_astar searches, so a guide that hugs a wall
+    # leaves hybrid_astar no room to move away from it.
+    astar.clearance_penalty: 1.0
+    astar.clearance_distance: 0.6
     hybrid:
       heading_bins: 72
       minimum_turning_radius: 0.4
@@ -53,11 +58,29 @@ global_path_planner:
       # Beyond that, it is tried every (cells to goal / this) nodes. Raising it above 1.0 tries
       # more often and measurably worsens detours (eltanin docs/planner-design.md 13.12).
       analytic_expansion_ratio: 1.0
-      # dubins is forward arcs only, for a car. differential adds turning on the spot, which is
-      # what this robot does; the returned path then contains poses that share a position.
-      # On the reference map a requested goal heading is reachable in 3 of 8 directions under
-      # dubins and in 8 of 8 under differential (eltanin docs/planner-design.md 13.15).
-      motion_model: differential
+      # What the body can do. The analytic tail follows from it: a Dubins path without reverse,
+      # a Reeds-Shepp one with it. Neither is a choice of its own.
+      # The body can drive backwards. The follower has to be able to execute a reversing run.
+      # Extra cost per metre of travel through the inflation band, once the outline lets the
+      # search in. The band is safety margin, not a shortcut: without this the search takes it
+      # wherever it is shorter. 0 restores that.
+      # Extra cost per metre travelled near a wall, falling to zero at clearance_distance.
+      # Measured from the obstacle itself, so 0.4 means "start paying inside 0.4 m of a wall".
+      clearance_penalty: 0.5
+      clearance_distance: 0.4
+      circumscribed_penalty: 6.0
+      # The closing turn onto the goal heading is a pose that shares its position with the one
+      # before it. navyu_path_tracker drives towards the next point, so it cannot execute that
+      # and circles the goal instead. false folds the heading into the last moving pose.
+      emit_goal_rotation: false
+      allow_reverse: false
+      # The body can rotate without translating, as a differential drive does. The path then
+      # contains consecutive poses that share a position, which the follower has to execute too.
+      allow_turn_in_place: true
+      # Multiplies the cost of reversing; only meaningful when the model allows reverse.
+      reverse_penalty: 2.0
+      # Charged per switch between forward and reverse, as a multiple of one motion step.
+      direction_change_penalty: 2.0
       # Weight on the distance-over-cells heuristic. Above about 0.9 the search goes greedy and
       # the path weaves; 1.0 is roughly 25x faster on a long plan but visibly worse
       # (eltanin docs/planner-design.md 13.16).

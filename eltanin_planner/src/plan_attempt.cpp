@@ -190,6 +190,9 @@ PlanAttempt attempt_plan(
     // guide instead (eltanin docs/planner-design.md 13.7).
     eltanin::planner::AStarParams guide_params = parameters.astar;
     guide_params.smoother.reset();
+    // The guide only bounds the corridor; the footprint check inside Hybrid A* decides what is
+    // safe.
+    guide_params.common.traversability_fallback.enabled = true;
     const eltanin::planner::PlanResult guide =
       eltanin::planner::plan_astar(costmap, model, start, goal, guide_params);
     if (!guide) {

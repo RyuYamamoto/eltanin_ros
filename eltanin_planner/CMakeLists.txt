@@ -35,6 +35,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
 # package to need them.
 target_link_libraries(${PROJECT_NAME} PUBLIC
   eltanin::planner
+  eltanin::collision
   eltanin_ros_common::eltanin_ros_common_runtime
   rclcpp::rclcpp
   rclcpp_action::rclcpp_action

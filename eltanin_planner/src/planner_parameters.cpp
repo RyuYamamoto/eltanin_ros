@@ -83,7 +83,7 @@ ConversionStatus validate_hybrid(const eltanin::planner::HybridAStarParams & hyb
     return bins;
   }
   const ConversionStatus radius =
-    require_finite_positive(KEY_MINIMUM_TURNING_RADIUS, hybrid.minimum_turning_radius);
+    require_finite_positive(KEY_MINIMUM_TURNING_RADIUS, hybrid.motion_model.minimum_turning_radius);
   if (!radius.ok()) {
     return radius;
   }
@@ -95,6 +95,31 @@ ConversionStatus validate_hybrid(const eltanin::planner::HybridAStarParams & hyb
     require_finite_non_negative(KEY_COLLISION_CHECK_STEP, hybrid.collision_check_step);
   if (!check.ok()) {
     return check;
+  }
+  const ConversionStatus hybrid_clear =
+    require_finite_non_negative(KEY_HYBRID_CLEARANCE_PENALTY, hybrid.clearance.penalty);
+  if (!hybrid_clear.ok()) {
+    return hybrid_clear;
+  }
+  const ConversionStatus hybrid_reach =
+    require_finite_positive(KEY_HYBRID_CLEARANCE_DISTANCE, hybrid.clearance.distance);
+  if (!hybrid_reach.ok()) {
+    return hybrid_reach;
+  }
+  const ConversionStatus band =
+    require_finite_non_negative(KEY_CIRCUMSCRIBED_PENALTY, hybrid.circumscribed_penalty);
+  if (!band.ok()) {
+    return band;
+  }
+  const ConversionStatus reverse =
+    require_finite_positive(KEY_REVERSE_PENALTY, hybrid.reverse_penalty);
+  if (!reverse.ok()) {
+    return reverse;
+  }
+  const ConversionStatus gear =
+    require_finite_non_negative(KEY_DIRECTION_CHANGE_PENALTY, hybrid.direction_change_penalty);
+  if (!gear.ok()) {
+    return gear;
   }
   const ConversionStatus dubins =
     require_finite_positive(KEY_DUBINS_EXPANSION_DISTANCE, hybrid.dubins_expansion_distance);
@@ -121,22 +146,6 @@ ConversionStatus validate_hybrid(const eltanin::planner::HybridAStarParams & hyb
 
 }  // namespace
 
-const char * name_of(eltanin::planner::MotionModel model) noexcept
-{
-  return model == eltanin::planner::MotionModel::Differential ? "differential" : "dubins";
-}
-
-std::optional<eltanin::planner::MotionModel> to_motion_model(std::string_view name) noexcept
-{
-  if (name == "dubins") {
-    return eltanin::planner::MotionModel::Dubins;
-  }
-  if (name == "differential") {
-    return eltanin::planner::MotionModel::Differential;
-  }
-  return std::nullopt;
-}
-
 const char * name_of(PlannerType type) noexcept
 {
   return type == PlannerType::HybridAStar ? "hybrid_astar" : "astar";
@@ -155,6 +164,16 @@ std::optional<PlannerType> to_planner_type(std::string_view name) noexcept
 
 ConversionStatus validate(const PlannerParameters & parameters)
 {
+  const ConversionStatus clearance_penalty =
+    require_finite_non_negative(KEY_ASTAR_CLEARANCE_PENALTY, parameters.astar.clearance.penalty);
+  if (!clearance_penalty.ok()) {
+    return clearance_penalty;
+  }
+  const ConversionStatus clearance_distance =
+    require_finite_positive(KEY_ASTAR_CLEARANCE_DISTANCE, parameters.astar.clearance.distance);
+  if (!clearance_distance.ok()) {
+    return clearance_distance;
+  }
   const ConversionStatus radius = require_non_negative(
     KEY_START_SEARCH_RADIUS_CELLS, parameters.astar.common.start_search_radius_cells);
   if (!radius.ok()) {

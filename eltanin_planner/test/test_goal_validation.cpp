@@ -254,7 +254,7 @@ PlannerParameters hybrid_parameters()
   PlannerParameters parameters;
   parameters.planner_type = eltanin_planner::PlannerType::HybridAStar;
   // A turning radius the 10x10 test map at 0.1 m can actually accommodate.
-  parameters.hybrid.minimum_turning_radius = 0.2;
+  parameters.hybrid.motion_model.minimum_turning_radius = 0.2;
   return parameters;
 }
 

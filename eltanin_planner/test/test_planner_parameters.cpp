@@ -148,7 +148,7 @@ TEST(PlannerParametersTest, TheHybridDefaultsAreEltaninsOwnDefaults)
   EXPECT_EQ(parameters.planner_type, eltanin_planner::PlannerType::AStar);
   EXPECT_EQ(parameters.hybrid.common.start_search_radius_cells, 8);
   EXPECT_EQ(parameters.hybrid.heading_bins, 72);
-  EXPECT_DOUBLE_EQ(parameters.hybrid.minimum_turning_radius, 0.4);
+  EXPECT_DOUBLE_EQ(parameters.hybrid.motion_model.minimum_turning_radius, 0.4);
   EXPECT_DOUBLE_EQ(parameters.hybrid.motion_step, 0.0);
   EXPECT_DOUBLE_EQ(parameters.hybrid.collision_check_step, 0.0);
   EXPECT_DOUBLE_EQ(parameters.hybrid.dubins_expansion_distance, 1.0);
@@ -156,7 +156,7 @@ TEST(PlannerParametersTest, TheHybridDefaultsAreEltaninsOwnDefaults)
   EXPECT_DOUBLE_EQ(parameters.hybrid.steering_change_penalty, 0.10);
   EXPECT_EQ(parameters.hybrid.max_expansions, 4000000u);
   EXPECT_DOUBLE_EQ(parameters.hybrid.analytic_expansion_ratio, 1.0);
-  EXPECT_EQ(parameters.hybrid.motion_model, eltanin::planner::MotionModel::Dubins);
+  EXPECT_EQ(parameters.hybrid.motion_model, eltanin::planner::MotionModel{});
   EXPECT_DOUBLE_EQ(parameters.hybrid.heuristic_weight, 0.8);
   EXPECT_FALSE(parameters.publish_footprint_path);
   EXPECT_EQ(parameters.footprint_marker_stride, 10);
@@ -183,7 +183,7 @@ TEST(PlannerParametersTest, RejectsTheHybridValuesEltaninWouldThrowOn)
   EXPECT_TRUE(rejects(validate(few_bins).message(), "hybrid.heading_bins"));
 
   PlannerParameters no_radius;
-  no_radius.hybrid.minimum_turning_radius = 0.0;
+  no_radius.hybrid.motion_model.minimum_turning_radius = 0.0;
   EXPECT_TRUE(rejects(validate(no_radius).message(), "hybrid.minimum_turning_radius"));
 
   PlannerParameters negative_step;
@@ -211,7 +211,7 @@ TEST(PlannerParametersTest, TheHybridValuesAreCheckedEvenWhileAStarIsSelected)
 {
   PlannerParameters parameters;
   ASSERT_EQ(parameters.planner_type, eltanin_planner::PlannerType::AStar);
-  parameters.hybrid.minimum_turning_radius = -1.0;
+  parameters.hybrid.motion_model.minimum_turning_radius = -1.0;
   EXPECT_TRUE(rejects(validate(parameters).message(), "hybrid.minimum_turning_radius"));
 }
 

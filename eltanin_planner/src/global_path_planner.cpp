@@ -17,6 +17,7 @@
 #include "eltanin_planner/plan_attempt.hpp"
 #include "src/diagnostic.hpp"
 
+#include <eltanin/collision/collision_checker.hpp>
 #include <eltanin/planner/path_smoother.hpp>
 #include <eltanin_ros_common/geometry_conversion.hpp>
 #include <eltanin_ros_common/map_conversion.hpp>
@@ -89,19 +90,6 @@ int require_non_negative_int(rclcpp::Node & node, const char * key, int fallback
   return value;
 }
 
-eltanin::planner::MotionModel require_motion_model(
-  rclcpp::Node & node, eltanin::planner::MotionModel fallback)
-{
-  const auto name = require_parameter<std::string>(node, KEY_MOTION_MODEL, name_of(fallback));
-  const std::optional<eltanin::planner::MotionModel> model = to_motion_model(name);
-  if (!model.has_value()) {
-    refuse_to_start(
-      node,
-      diagnostic::rejected(KEY_MOTION_MODEL, "is '" + name + "', not 'dubins' or 'differential'"));
-  }
-  return *model;
-}
-
 PlannerType require_planner_type(rclcpp::Node & node, PlannerType fallback)
 {
   const auto name = require_parameter<std::string>(node, KEY_PLANNER_TYPE, name_of(fallback));
@@ -116,7 +104,7 @@ PlannerType require_planner_type(rclcpp::Node & node, PlannerType fallback)
 }
 
 /// Read once at construction and never again; the defaults come from eltanin, not from literals.
-PlannerParameters require_parameters(rclcpp::Node & node)
+PlannerParameters require_parameters(rclcpp::Node & node, const eltanin::Polygon2D & footprint)
 {
   const PlannerParameters defaults;
   PlannerParameters parameters;
@@ -128,8 +116,6 @@ PlannerParameters require_parameters(rclcpp::Node & node)
     parameters.astar.common.start_search_radius_cells;
   parameters.hybrid.heading_bins =
     require_int(node, KEY_HEADING_BINS, defaults.hybrid.heading_bins);
-  parameters.hybrid.minimum_turning_radius =
-    require_parameter(node, KEY_MINIMUM_TURNING_RADIUS, defaults.hybrid.minimum_turning_radius);
   parameters.hybrid.motion_step =
     require_parameter(node, KEY_MOTION_STEP, defaults.hybrid.motion_step);
   parameters.hybrid.collision_check_step =
@@ -144,9 +130,27 @@ PlannerParameters require_parameters(rclcpp::Node & node)
     node, KEY_MAX_EXPANSIONS, static_cast<int>(defaults.hybrid.max_expansions)));
   parameters.hybrid.analytic_expansion_ratio =
     require_parameter(node, KEY_ANALYTIC_EXPANSION_RATIO, defaults.hybrid.analytic_expansion_ratio);
-  parameters.hybrid.motion_model = require_motion_model(node, defaults.hybrid.motion_model);
+  parameters.hybrid.clearance.penalty =
+    require_parameter(node, KEY_HYBRID_CLEARANCE_PENALTY, defaults.hybrid.clearance.penalty);
+  parameters.hybrid.clearance.distance =
+    require_parameter(node, KEY_HYBRID_CLEARANCE_DISTANCE, defaults.hybrid.clearance.distance);
+  parameters.hybrid.emit_goal_rotation =
+    require_parameter(node, KEY_EMIT_GOAL_ROTATION, defaults.hybrid.emit_goal_rotation);
+  parameters.hybrid.circumscribed_penalty =
+    require_parameter(node, KEY_CIRCUMSCRIBED_PENALTY, defaults.hybrid.circumscribed_penalty);
+  parameters.hybrid.motion_model.reverse =
+    require_parameter(node, KEY_ALLOW_REVERSE, defaults.hybrid.motion_model.reverse);
+  parameters.hybrid.motion_model.turn_in_place =
+    require_parameter(node, KEY_ALLOW_TURN_IN_PLACE, defaults.hybrid.motion_model.turn_in_place);
+  // Set after the model, which would otherwise carry its own default radius over the parameter.
+  parameters.hybrid.motion_model.minimum_turning_radius = require_parameter(
+    node, KEY_MINIMUM_TURNING_RADIUS, defaults.hybrid.motion_model.minimum_turning_radius);
   parameters.hybrid.heuristic_weight =
     require_parameter(node, KEY_HEURISTIC_WEIGHT, defaults.hybrid.heuristic_weight);
+  parameters.hybrid.reverse_penalty =
+    require_parameter(node, KEY_REVERSE_PENALTY, defaults.hybrid.reverse_penalty);
+  parameters.hybrid.direction_change_penalty =
+    require_parameter(node, KEY_DIRECTION_CHANGE_PENALTY, defaults.hybrid.direction_change_penalty);
   parameters.hybrid_max_states = static_cast<std::size_t>(
     require_non_negative_int(node, KEY_MAX_STATES, static_cast<int>(defaults.hybrid_max_states)));
   parameters.hybrid_corridor_margin_cells = require_non_negative_int(
@@ -167,6 +171,10 @@ PlannerParameters require_parameters(rclcpp::Node & node)
   } else {
     parameters.astar.smoother = parameters.smoother;
   }
+  parameters.astar.clearance.penalty =
+    require_parameter(node, KEY_ASTAR_CLEARANCE_PENALTY, defaults.astar.clearance.penalty);
+  parameters.astar.clearance.distance =
+    require_parameter(node, KEY_ASTAR_CLEARANCE_DISTANCE, defaults.astar.clearance.distance);
   parameters.unknown_is_free =
     require_parameter(node, KEY_UNKNOWN_IS_FREE, defaults.unknown_is_free);
   parameters.tf_lookup_timeout =
@@ -175,6 +183,9 @@ PlannerParameters require_parameters(rclcpp::Node & node)
     require_parameter(node, KEY_PUBLISH_FOOTPRINT_PATH, defaults.publish_footprint_path);
   parameters.footprint_marker_stride =
     require_int(node, KEY_FOOTPRINT_MARKER_STRIDE, defaults.footprint_marker_stride);
+
+  // With the outline the search may use the circumscribed band at headings the body clears.
+  parameters.hybrid.common.footprint = footprint;
 
   const eltanin_ros_common::ConversionStatus status = validate(parameters);
   if (!status.ok()) {
@@ -233,7 +244,7 @@ std::string milliseconds_between(
 GlobalPathPlanner::GlobalPathPlanner(const rclcpp::NodeOptions & options)
 : rclcpp::Node("global_path_planner", options),
   profile_(require_robot_profile(*this)),
-  parameters_(require_parameters(*this)),
+  parameters_(require_parameters(*this, profile_.footprint())),
   model_(profile_.inflation_cost_model().circumscribed_cost(), parameters_.unknown_is_free),
   tf_timeout_(rclcpp::Duration::from_seconds(parameters_.tf_lookup_timeout)),
   tf_buffer_(get_clock())
@@ -462,6 +473,79 @@ void GlobalPathPlanner::execute(const std::shared_ptr<GoalHandle> & handle)
 
   if (interrupted(handle)) {
     return;
+  }
+
+  // What the returned path actually stands on, so a suspect path can be judged from the log.
+  {
+    std::size_t on_free = 0;
+    std::size_t in_band = 0;
+    std::size_t on_obstacle = 0;
+    std::size_t off_map = 0;
+    for (const eltanin::Pose2D & pose : smoothed) {
+      const auto cell = costmap->geometry().world_to_map(pose.position);
+      if (!cell.has_value()) {
+        ++off_map;
+        continue;
+      }
+      switch (model_.classify((*costmap)(cell->x, cell->y))) {
+        case eltanin::Traversability::Free:
+          ++on_free;
+          break;
+        case eltanin::Traversability::Circumscribed:
+          ++in_band;
+          break;
+        case eltanin::Traversability::Inscribed:
+          ++on_obstacle;
+          break;
+      }
+    }
+    // How close the body itself gets to a real obstacle, which is what "too close" means.
+    double worst_gap = std::numeric_limits<double>::infinity();
+    for (const eltanin::Pose2D & pose : smoothed) {
+      const auto here = costmap->geometry().world_to_map(pose.position);
+      if (!here.has_value()) {
+        continue;
+      }
+      for (int dy = -24; dy <= 24; ++dy) {
+        for (int dx = -24; dx <= 24; ++dx) {
+          const int mx = here->x + dx;
+          const int my = here->y + dy;
+          if (!costmap->geometry().in_bounds(mx, my) || !model_.is_obstacle((*costmap)(mx, my))) {
+            continue;
+          }
+          worst_gap =
+            std::min(worst_gap, (pose.position - costmap->geometry().map_to_world(mx, my)).norm());
+        }
+      }
+    }
+
+    // The classification of the centre cell says nothing about where the body actually is.
+    std::size_t touching = 0;
+    for (const eltanin::Pose2D & pose : smoothed) {
+      if (
+        eltanin::collision::check_footprint_exact(*costmap, model_, profile_.footprint(), pose) ==
+        eltanin::collision::CollisionCheck::Collision) {
+        ++touching;
+      }
+    }
+    if (touching != 0) {
+      RCLCPP_ERROR(
+        get_logger(),
+        "path %.2f m, %zu poses: %zu of them put the footprint on an obstacle"
+        " (free %zu, circumscribed %zu, inscribed %zu, off map %zu, nearest wall %.3f m)",
+        eltanin::path_length(smoothed), smoothed.size(), touching, on_free, in_band, on_obstacle,
+        off_map, worst_gap);
+    } else if (in_band + off_map == 0) {
+      RCLCPP_INFO(
+        get_logger(), "path %.2f m, %zu poses: all free, footprint clear, nearest wall %.3f m",
+        eltanin::path_length(smoothed), smoothed.size(), worst_gap);
+    } else {
+      RCLCPP_WARN(
+        get_logger(),
+        "path %.2f m, %zu poses: footprint clear, free %zu, circumscribed %zu, off map %zu,"
+        " nearest wall %.3f m",
+        eltanin::path_length(smoothed), smoothed.size(), on_free, in_band, off_map, worst_gap);
+    }
   }
 
   const rclcpp::Time stamp = now();

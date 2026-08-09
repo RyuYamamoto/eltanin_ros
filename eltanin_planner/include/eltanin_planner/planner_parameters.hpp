@@ -47,7 +47,16 @@ inline constexpr const char * KEY_STEERING_PENALTY = "hybrid.steering_penalty";
 inline constexpr const char * KEY_STEERING_CHANGE_PENALTY = "hybrid.steering_change_penalty";
 inline constexpr const char * KEY_MAX_EXPANSIONS = "hybrid.max_expansions";
 inline constexpr const char * KEY_ANALYTIC_EXPANSION_RATIO = "hybrid.analytic_expansion_ratio";
-inline constexpr const char * KEY_MOTION_MODEL = "hybrid.motion_model";
+inline constexpr const char * KEY_ASTAR_CLEARANCE_PENALTY = "astar.clearance_penalty";
+inline constexpr const char * KEY_ASTAR_CLEARANCE_DISTANCE = "astar.clearance_distance";
+inline constexpr const char * KEY_CIRCUMSCRIBED_PENALTY = "hybrid.circumscribed_penalty";
+inline constexpr const char * KEY_EMIT_GOAL_ROTATION = "hybrid.emit_goal_rotation";
+inline constexpr const char * KEY_HYBRID_CLEARANCE_PENALTY = "hybrid.clearance_penalty";
+inline constexpr const char * KEY_HYBRID_CLEARANCE_DISTANCE = "hybrid.clearance_distance";
+inline constexpr const char * KEY_ALLOW_REVERSE = "hybrid.allow_reverse";
+inline constexpr const char * KEY_ALLOW_TURN_IN_PLACE = "hybrid.allow_turn_in_place";
+inline constexpr const char * KEY_REVERSE_PENALTY = "hybrid.reverse_penalty";
+inline constexpr const char * KEY_DIRECTION_CHANGE_PENALTY = "hybrid.direction_change_penalty";
 inline constexpr const char * KEY_HEURISTIC_WEIGHT = "hybrid.heuristic_weight";
 inline constexpr const char * KEY_MAX_STATES = "hybrid.max_states";
 inline constexpr const char * KEY_CORRIDOR_MARGIN_CELLS = "hybrid.corridor_margin_cells";
@@ -62,16 +71,15 @@ const char * name_of(PlannerType type) noexcept;
 std::optional<PlannerType> to_planner_type(std::string_view name) noexcept;
 
 /// The parameter spelling of the control set the vehicle is allowed to use.
-const char * name_of(eltanin::planner::MotionModel model) noexcept;
 
 /// The inverse; nullopt for a name nobody defined.
-std::optional<eltanin::planner::MotionModel> to_motion_model(std::string_view name) noexcept;
 
 /// eltanin's own parameter structs are held by value, so the two sets of defaults cannot drift.
 struct PlannerParameters
 {
   PlannerType planner_type{PlannerType::AStar};
-  eltanin::planner::AStarParams astar{};
+  eltanin::planner::AStarParams astar{
+    {}, eltanin::planner::SmootherParams{}, eltanin::planner::ClearanceCost{1.0, 0.6}};
   eltanin::planner::HybridAStarParams hybrid{};
   eltanin::planner::SmootherParams smoother{};
   bool publish_raw_path{false};
