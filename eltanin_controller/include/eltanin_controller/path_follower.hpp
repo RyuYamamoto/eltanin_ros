@@ -20,6 +20,7 @@
 #include "eltanin_controller/path_input.hpp"
 
 #include <eltanin/control/goal_approach.hpp>
+#include <eltanin/control/path_follower.hpp>
 #include <eltanin/control/pure_pursuit.hpp>
 #include <eltanin_ros_common/conversion_result.hpp>
 #include <eltanin_ros_common/robot_profile.hpp>
@@ -96,7 +97,9 @@ private:
   const FollowerParameters parameters_;
 
   eltanin_ros_common::PeriodicClock clock_;
-  eltanin::control::PurePursuit pursuit_;
+  std::unique_ptr<eltanin::control::PathFollower> follower_;
+  /// Non-owning view of follower_ when it is a pure pursuit; the MPC publishes no lookahead point.
+  eltanin::control::PurePursuit * pursuit_{nullptr};
   eltanin::control::GoalApproach approach_;
 
   /// Set by ~/reset alone; the path subscription never touches the two controllers.

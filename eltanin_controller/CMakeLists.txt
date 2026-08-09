@@ -56,11 +56,13 @@ rclcpp_components_register_node(${PROJECT_NAME}
   NO_UNDEFINED_SYMBOLS)
 
 install(DIRECTORY include/ DESTINATION include/${PROJECT_NAME})
+install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
 # Required: the generated executable dlopens lib/libeltanin_controller.so to find the component.
 install(TARGETS ${PROJECT_NAME} LIBRARY DESTINATION lib)
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  find_package(ament_index_cpp REQUIRED)
   foreach(test_name
       test_command_composition
       test_follower_parameters
@@ -74,7 +76,7 @@ if(BUILD_TESTING)
   # The only test in this package that calls rclcpp::init; the pure parts above do not need it.
   # 120 s rather than 60: a 20 Hz timer watched over several cycles in a Debug CI build is slow.
   ament_add_gtest(test_path_follower test/test_path_follower.cpp TIMEOUT 120)
-  target_link_libraries(test_path_follower ${PROJECT_NAME})
+  target_link_libraries(test_path_follower ${PROJECT_NAME} ament_index_cpp::ament_index_cpp)
   target_include_directories(test_path_follower PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_compile_options(test_path_follower PRIVATE ${warning_options})
 endif()

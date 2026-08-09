@@ -1,0 +1,69 @@
+# Every parameter path_follower declares, written out. The machine values (robot.* and frames.*)
+# are not here: they come from eltanin_ros_common/config/robot/<profile>.yaml through the /**
+# wildcard, so no key appears in both files.
+#
+# Values marked TUNED differ from eltanin's own defaults; the default is given so a single knob can
+# be put back without looking it up.
+path_follower:
+  ros__parameters:
+    update_frequency: 20.0
+    # path or trajectory. local_path_planner does not exist yet, so the global path is followed.
+    path_source: path
+    # pure_pursuit or mpc. mpc needs eltanin_vendor built with ELTANIN_VENDOR_ENABLE_MPC=ON.
+    follower_type: pure_pursuit
+    # 0 is no deadline: the global path is published once per replan, not periodically.
+    path_timeout: 0.0
+    trajectory_timeout: 0.5
+
+    xy_goal_tolerance: 0.10
+    yaw_goal_tolerance: 0.10
+    approach_distance: 0.5
+    approach_decel: 0.5
+    yaw_align_timeout: 5.0
+
+    pure_pursuit:
+      # Capped at robot.max_linear_vel, which is 0.30 on kachaka.
+      desired_linear_vel: 0.5
+      yaw_tolerance: 0.07
+      # The lookahead is lookahead_time * v + min_lookahead_dist, so it never drops below 0.3 m.
+      lookahead_time: 0.1
+      min_lookahead_dist: 0.3
+
+    mpc:
+      # TUNED: 0.1. The horizon is a time, so its length in metres shrinks with the speed:
+      # 20 x 0.1 s x 0.15 m/s is only 0.30 m, which is barely past the front of the footprint and
+      # leaves nothing to anticipate a curve with. 0.2 s gives 4 s, or 0.60 m at 0.15 m/s.
+      prediction_dt: 0.2
+      prediction_horizon: 20
+      # Capped at robot.max_linear_vel like the pure pursuit cruise speed.
+      max_linear_vel: 0.5
+      # 0 forbids reversing, as every follower here does.
+      min_linear_vel: 0.0
+      max_linear_accel: 1.0
+      # eltanin calls this one a guess: it was never measured on the robot. Halve it if the
+      # steering still looks abrupt after the rate weight below.
+      max_angular_accel: 3.0
+
+      weight_lateral: 200.0
+      weight_longitudinal: 1.0
+      weight_yaw: 5.0
+      weight_linear_vel: 1.0
+      weight_angular_vel: 1.0
+      weight_linear_vel_rate: 1.0
+      # TUNED: 1.0. This is the cost of *changing* the angular velocity, and at 1.0 it is 200 times
+      # weaker than the lateral error it competes with, so the solver swings the steering to null
+      # the error. This is the first knob for smoothness; raise further before touching the others.
+      weight_angular_vel_rate: 20.0
+      terminal_weight_scale: 10.0
+
+      yaw_tolerance: 0.07
+      # Above this the linearisation about the reference stops being trustworthy and the body turns.
+      max_heading_error: 0.785
+      max_consecutive_failures: 3
+
+      solver:
+        max_iterations: 500
+        eps_abs: 0.0001
+        eps_rel: 0.0001
+        warm_start: true
+        polish: false

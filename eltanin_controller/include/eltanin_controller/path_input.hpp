@@ -56,6 +56,9 @@ public:
   /// Records why the last message was dropped; a path already held keeps being followed.
   void reject(std::string detail);
 
+  /// Forgets the held path, so the next cycles report NeverReceived until a new one arrives.
+  void clear();
+
   /// The snapshot comes back by value so that no caller computes while holding the node's lock.
   Reading read(const rclcpp::Time & now) const;
 

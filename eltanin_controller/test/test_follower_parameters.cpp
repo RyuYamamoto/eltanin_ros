@@ -47,7 +47,7 @@ constexpr double NOT_A_NUMBER = std::numeric_limits<double>::quiet_NaN();
 FollowerParameters make_parameters()
 {
   FollowerParameters parameters;
-  parameters.pursuit.max_angular_vel = 1.57;
+  parameters.follower.pure_pursuit.max_angular_vel = 1.57;
   parameters.approach.max_angular_vel = 1.57;
   return parameters;
 }
@@ -104,22 +104,22 @@ TEST(ValidateTest, APathDeadlineOfZeroIsNoDeadlineAndANegativeOneIsAnError)
 TEST(ValidateTest, RefusesExactlyWhatPurePursuitCreateRefuses)
 {
   FollowerParameters parameters = make_parameters();
-  parameters.pursuit.yaw_tolerance = std::numbers::pi;
+  parameters.follower.pure_pursuit.yaw_tolerance = std::numbers::pi;
   EXPECT_FALSE(validate(parameters).ok());
-  EXPECT_FALSE(eltanin::control::PurePursuit::create(parameters.pursuit).has_value());
+  EXPECT_FALSE(eltanin::control::PurePursuit::create(parameters.follower.pure_pursuit).has_value());
 
-  parameters.pursuit.yaw_tolerance = std::numbers::pi - 1e-12;
+  parameters.follower.pure_pursuit.yaw_tolerance = std::numbers::pi - 1e-12;
   EXPECT_TRUE(validate(parameters).ok());
-  EXPECT_TRUE(eltanin::control::PurePursuit::create(parameters.pursuit).has_value());
+  EXPECT_TRUE(eltanin::control::PurePursuit::create(parameters.follower.pure_pursuit).has_value());
 
   parameters = make_parameters();
-  parameters.pursuit.lookahead_time = 0.0;
+  parameters.follower.pure_pursuit.lookahead_time = 0.0;
   EXPECT_TRUE(validate(parameters).ok());
-  EXPECT_TRUE(eltanin::control::PurePursuit::create(parameters.pursuit).has_value());
+  EXPECT_TRUE(eltanin::control::PurePursuit::create(parameters.follower.pure_pursuit).has_value());
 
-  parameters.pursuit.min_lookahead_dist = 0.0;
+  parameters.follower.pure_pursuit.min_lookahead_dist = 0.0;
   EXPECT_TRUE(names(validate(parameters).message(), "min_lookahead_dist"));
-  EXPECT_FALSE(eltanin::control::PurePursuit::create(parameters.pursuit).has_value());
+  EXPECT_FALSE(eltanin::control::PurePursuit::create(parameters.follower.pure_pursuit).has_value());
 }
 
 TEST(ValidateTest, RefusesExactlyWhatGoalApproachCreateRefuses)
@@ -148,7 +148,7 @@ TEST(ValidateTest, RefusesExactlyWhatGoalApproachCreateRefuses)
 TEST(ValidateTest, TheAngularLimitIsNamedAfterTheProfileKeyItComesFrom)
 {
   FollowerParameters parameters = make_parameters();
-  parameters.pursuit.max_angular_vel = 0.0;
+  parameters.follower.pure_pursuit.max_angular_vel = 0.0;
   EXPECT_TRUE(names(validate(parameters).message(), "robot.max_angular_vel"));
 }
 
@@ -161,15 +161,15 @@ TEST(VelocityLimitsTest, TheAngularLimitReachesBothGenerators)
 
   const auto clamp = apply_velocity_limits(parameters, limits);
   EXPECT_FALSE(clamp.clamped);
-  EXPECT_DOUBLE_EQ(parameters.pursuit.max_angular_vel, 1.57);
+  EXPECT_DOUBLE_EQ(parameters.follower.pure_pursuit.max_angular_vel, 1.57);
   EXPECT_DOUBLE_EQ(parameters.approach.max_angular_vel, 1.57);
-  EXPECT_DOUBLE_EQ(parameters.pursuit.desired_linear_vel, 0.5);
+  EXPECT_DOUBLE_EQ(parameters.follower.pure_pursuit.desired_linear_vel, 0.5);
 }
 
 TEST(VelocityLimitsTest, ACruiseSpeedAboveTheBodyLimitIsClampedRatherThanRefused)
 {
   FollowerParameters parameters;
-  parameters.pursuit.desired_linear_vel = 0.5;
+  parameters.follower.pure_pursuit.desired_linear_vel = 0.5;
   eltanin_ros_common::VelocityLimits limits;
   limits.max_linear_vel = 0.30;
   limits.max_angular_vel = 1.57;
@@ -178,7 +178,7 @@ TEST(VelocityLimitsTest, ACruiseSpeedAboveTheBodyLimitIsClampedRatherThanRefused
   EXPECT_TRUE(clamp.clamped);
   EXPECT_DOUBLE_EQ(clamp.requested, 0.5);
   EXPECT_DOUBLE_EQ(clamp.applied, 0.30);
-  EXPECT_DOUBLE_EQ(parameters.pursuit.desired_linear_vel, 0.30);
+  EXPECT_DOUBLE_EQ(parameters.follower.pure_pursuit.desired_linear_vel, 0.30);
   EXPECT_TRUE(validate(parameters).ok());
 }
 

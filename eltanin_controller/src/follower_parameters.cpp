@@ -26,12 +26,12 @@ namespace eltanin_controller
 namespace
 {
 
+using eltanin::control::FollowerType;
 using eltanin_ros_common::ConversionStatus;
 
-/// The name the angular limit carries in the profile; this node declares no key of its own for it.
+/// The profile key the angular bound comes from; this node declares none of its own.
 constexpr const char * ANGULAR_LIMIT = "robot.max_angular_vel";
 
-/// A period longer than an hour is a timer that never fires again in any run worth watching.
 constexpr double LONGEST_PERIOD = 3600.0;
 
 ConversionStatus require_finite(const char * key, double value)
@@ -69,7 +69,6 @@ ConversionStatus require_non_negative(const char * key, double value)
   return ConversionStatus::success();
 }
 
-/// eltanin refuses an angle at pi as well as below zero; a tolerance of half a turn is not one.
 ConversionStatus require_angle_below_half_turn(const char * key, double value)
 {
   const ConversionStatus positive = require_positive(key, value);
@@ -83,7 +82,15 @@ ConversionStatus require_angle_below_half_turn(const char * key, double value)
   return ConversionStatus::success();
 }
 
-/// The conditions PurePursuit::create() returns nullopt on, in the order it checks them.
+ConversionStatus require_positive_int(const char * key, int value)
+{
+  if (value <= 0) {
+    return ConversionStatus::failure(
+      diagnostic::rejected(key, "is " + std::to_string(value) + ", which must be greater than 0"));
+  }
+  return ConversionStatus::success();
+}
+
 ConversionStatus validate_pursuit(const eltanin::control::PurePursuitParams & pursuit)
 {
   const ConversionStatus linear =
@@ -107,7 +114,120 @@ ConversionStatus validate_pursuit(const eltanin::control::PurePursuitParams & pu
   return require_positive(KEY_MIN_LOOKAHEAD_DIST, pursuit.min_lookahead_dist);
 }
 
-/// The conditions GoalApproach::create() returns nullopt on, in the order it checks them.
+#ifdef ELTANIN_WITH_MPC
+ConversionStatus validate_mpc(const eltanin::control::MpcFollowerParams & mpc)
+{
+  const ConversionStatus horizon =
+    require_positive_int(KEY_MPC_PREDICTION_HORIZON, mpc.prediction_horizon);
+  if (!horizon.ok()) {
+    return horizon;
+  }
+  const ConversionStatus step = require_positive(KEY_MPC_PREDICTION_DT, mpc.prediction_dt);
+  if (!step.ok()) {
+    return step;
+  }
+  const ConversionStatus fastest = require_positive(KEY_MPC_MAX_LINEAR_VEL, mpc.max_linear_vel);
+  if (!fastest.ok()) {
+    return fastest;
+  }
+  const ConversionStatus slowest = require_finite(KEY_MPC_MIN_LINEAR_VEL, mpc.min_linear_vel);
+  if (!slowest.ok()) {
+    return slowest;
+  }
+  if (mpc.min_linear_vel > mpc.max_linear_vel) {
+    return ConversionStatus::failure(diagnostic::rejected(
+      KEY_MPC_MIN_LINEAR_VEL, "is " + std::to_string(mpc.min_linear_vel) + ", above " +
+                                std::string(KEY_MPC_MAX_LINEAR_VEL) + " " +
+                                std::to_string(mpc.max_linear_vel)));
+  }
+  const ConversionStatus angular = require_positive(ANGULAR_LIMIT, mpc.max_angular_vel);
+  if (!angular.ok()) {
+    return angular;
+  }
+  const ConversionStatus accel = require_positive(KEY_MPC_MAX_LINEAR_ACCEL, mpc.max_linear_accel);
+  if (!accel.ok()) {
+    return accel;
+  }
+  const ConversionStatus turn_accel =
+    require_positive(KEY_MPC_MAX_ANGULAR_ACCEL, mpc.max_angular_accel);
+  if (!turn_accel.ok()) {
+    return turn_accel;
+  }
+  const ConversionStatus yaw =
+    require_angle_below_half_turn(KEY_MPC_YAW_TOLERANCE, mpc.yaw_tolerance);
+  if (!yaw.ok()) {
+    return yaw;
+  }
+  const ConversionStatus heading =
+    require_angle_below_half_turn(KEY_MPC_MAX_HEADING_ERROR, mpc.max_heading_error);
+  if (!heading.ok()) {
+    return heading;
+  }
+  if (mpc.yaw_tolerance > mpc.max_heading_error) {
+    return ConversionStatus::failure(diagnostic::rejected(
+      KEY_MPC_YAW_TOLERANCE, "is " + std::to_string(mpc.yaw_tolerance) + ", above " +
+                               std::string(KEY_MPC_MAX_HEADING_ERROR) + " " +
+                               std::to_string(mpc.max_heading_error)));
+  }
+  if (mpc.max_consecutive_failures < 0) {
+    return ConversionStatus::failure(diagnostic::rejected(
+      KEY_MPC_MAX_CONSECUTIVE_FAILURES,
+      "is " + std::to_string(mpc.max_consecutive_failures) + ", which must not be negative"));
+  }
+
+  const ConversionStatus lateral = require_non_negative(KEY_MPC_WEIGHT_LATERAL, mpc.weight_lateral);
+  if (!lateral.ok()) {
+    return lateral;
+  }
+  const ConversionStatus longitudinal =
+    require_non_negative(KEY_MPC_WEIGHT_LONGITUDINAL, mpc.weight_longitudinal);
+  if (!longitudinal.ok()) {
+    return longitudinal;
+  }
+  const ConversionStatus heading_weight = require_non_negative(KEY_MPC_WEIGHT_YAW, mpc.weight_yaw);
+  if (!heading_weight.ok()) {
+    return heading_weight;
+  }
+  const ConversionStatus terminal =
+    require_positive(KEY_MPC_TERMINAL_WEIGHT_SCALE, mpc.terminal_weight_scale);
+  if (!terminal.ok()) {
+    return terminal;
+  }
+  // Strictly positive, or the QP has no unique minimiser.
+  const ConversionStatus speed_weight =
+    require_positive(KEY_MPC_WEIGHT_LINEAR_VEL, mpc.weight_linear_vel);
+  if (!speed_weight.ok()) {
+    return speed_weight;
+  }
+  const ConversionStatus turn_weight =
+    require_positive(KEY_MPC_WEIGHT_ANGULAR_VEL, mpc.weight_angular_vel);
+  if (!turn_weight.ok()) {
+    return turn_weight;
+  }
+  const ConversionStatus speed_rate =
+    require_non_negative(KEY_MPC_WEIGHT_LINEAR_VEL_RATE, mpc.weight_linear_vel_rate);
+  if (!speed_rate.ok()) {
+    return speed_rate;
+  }
+  const ConversionStatus turn_rate =
+    require_non_negative(KEY_MPC_WEIGHT_ANGULAR_VEL_RATE, mpc.weight_angular_vel_rate);
+  if (!turn_rate.ok()) {
+    return turn_rate;
+  }
+
+  const ConversionStatus iterations =
+    require_positive_int(KEY_MPC_SOLVER_MAX_ITERATIONS, mpc.solver.max_iterations);
+  if (!iterations.ok()) {
+    return iterations;
+  }
+  const ConversionStatus eps_abs = require_positive(KEY_MPC_SOLVER_EPS_ABS, mpc.solver.eps_abs);
+  if (!eps_abs.ok()) {
+    return eps_abs;
+  }
+  return require_positive(KEY_MPC_SOLVER_EPS_REL, mpc.solver.eps_rel);
+}
+#endif
+
 ConversionStatus validate_approach(const eltanin::control::GoalApproachParams & approach)
 {
   const ConversionStatus xy = require_positive(KEY_XY_GOAL_TOLERANCE, approach.xy_goal_tolerance);
@@ -147,6 +267,21 @@ ConversionStatus validate_approach(const eltanin::control::GoalApproachParams & 
   return ConversionStatus::success();
 }
 
+ConversionStatus validate_follower(const eltanin::control::FollowerFactoryParams & follower)
+{
+  if (follower.type == FollowerType::Mpc) {
+#ifdef ELTANIN_WITH_MPC
+    return validate_mpc(follower.mpc);
+#else
+    return ConversionStatus::failure(diagnostic::rejected(
+      KEY_FOLLOWER_TYPE,
+      "is 'mpc', which this build of eltanin does not contain: configure "
+      "eltanin_vendor with ELTANIN_VENDOR_ENABLE_MPC=ON"));
+#endif
+  }
+  return validate_pursuit(follower.pure_pursuit);
+}
+
 }  // namespace
 
 const char * name_of(PathSource source) noexcept
@@ -165,19 +300,40 @@ std::optional<PathSource> to_path_source(std::string_view name) noexcept
   return std::nullopt;
 }
 
+bool mpc_is_available() noexcept
+{
+#ifdef ELTANIN_WITH_MPC
+  return true;
+#else
+  return false;
+#endif
+}
+
 VelocityClamp apply_velocity_limits(
   FollowerParameters & parameters, const eltanin_ros_common::VelocityLimits & limits)
 {
-  parameters.pursuit.max_angular_vel = limits.max_angular_vel;
   parameters.approach.max_angular_vel = limits.max_angular_vel;
+  parameters.follower.pure_pursuit.max_angular_vel = limits.max_angular_vel;
+#ifdef ELTANIN_WITH_MPC
+  parameters.follower.mpc.max_angular_vel = limits.max_angular_vel;
+#endif
 
+  double * speed = &parameters.follower.pure_pursuit.desired_linear_vel;
   VelocityClamp clamp;
-  clamp.requested = parameters.pursuit.desired_linear_vel;
+  clamp.key = KEY_DESIRED_LINEAR_VEL;
+#ifdef ELTANIN_WITH_MPC
+  if (parameters.follower.type == FollowerType::Mpc) {
+    speed = &parameters.follower.mpc.max_linear_vel;
+    clamp.key = KEY_MPC_MAX_LINEAR_VEL;
+  }
+#endif
+
+  clamp.requested = *speed;
   clamp.applied = clamp.requested;
   if (std::isfinite(clamp.requested) && clamp.requested > limits.max_linear_vel) {
     clamp.clamped = true;
     clamp.applied = limits.max_linear_vel;
-    parameters.pursuit.desired_linear_vel = limits.max_linear_vel;
+    *speed = limits.max_linear_vel;
   }
   return clamp;
 }
@@ -206,9 +362,9 @@ ConversionStatus validate(const FollowerParameters & parameters)
   if (!deadline.ok()) {
     return deadline;
   }
-  const ConversionStatus pursuit = validate_pursuit(parameters.pursuit);
-  if (!pursuit.ok()) {
-    return pursuit;
+  const ConversionStatus follower = validate_follower(parameters.follower);
+  if (!follower.ok()) {
+    return follower;
   }
   return validate_approach(parameters.approach);
 }

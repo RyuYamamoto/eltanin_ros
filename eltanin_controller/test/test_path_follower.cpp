@@ -14,7 +14,9 @@
 
 #include "eltanin_controller/path_follower.hpp"
 
+#include <ament_index_cpp/get_package_share_directory.hpp>
 #include <eltanin_ros_common/geometry_conversion.hpp>
+#include <rclcpp/parameter_map.hpp>
 #include <rclcpp/rclcpp.hpp>
 
 #include <eltanin_msgs/msg/follower_diagnostic.hpp>
@@ -88,6 +90,23 @@ eltanin_msgs::msg::Trajectory2D make_trajectory(const rclcpp::Time & stamp)
   return msg;
 }
 
+std::vector<rclcpp::Parameter> shipped_configuration()
+{
+  std::vector<rclcpp::Parameter> parameters;
+  const std::vector<std::string> files{
+    ament_index_cpp::get_package_share_directory("eltanin_ros_common") +
+      "/config/robot/kachaka.yaml",
+    ament_index_cpp::get_package_share_directory("eltanin_controller") +
+      "/config/path_follower.param.yaml"};
+  for (const std::string & file : files) {
+    for (const auto & [node_name, values] : rclcpp::parameter_map_from_yaml_file(file)) {
+      (void)node_name;
+      parameters.insert(parameters.end(), values.begin(), values.end());
+    }
+  }
+  return parameters;
+}
+
 /// One MultiThreadedExecutor for both nodes, which is the executor the generated entry point uses.
 class PathFollowerFixture : public ::testing::Test
 {
@@ -139,8 +158,10 @@ protected:
 
   void start(const std::vector<rclcpp::Parameter> & parameters = {})
   {
-    std::vector<rclcpp::Parameter> all{
-      rclcpp::Parameter("frames.map", MAP_FRAME), rclcpp::Parameter("frames.base", BASE_FRAME)};
+    // The shipped configuration, so a key missing from it fails here instead of on the robot.
+    std::vector<rclcpp::Parameter> all = shipped_configuration();
+    all.emplace_back("frames.map", MAP_FRAME);
+    all.emplace_back("frames.base", BASE_FRAME);
     all.insert(all.end(), parameters.begin(), parameters.end());
     rclcpp::NodeOptions options;
     options.parameter_overrides(all);
@@ -432,9 +453,9 @@ TEST_F(PathFollowerFixture, ResetTakesEffectBeforeTheNextCommandAndTheRampStarts
   EXPECT_TRUE(response->success);
   EXPECT_FALSE(response->message.empty());
 
-  ASSERT_TRUE(wait_until("the ramp to start from zero again", [this]() {
-    return last_command().twist.linear.x < 0.05;
-  }));
+  // The reset drops the path along with the latches, so the follower falls back to no input.
+  ASSERT_TRUE(wait_for_reason(Diagnostic::REASON_NO_INPUT));
+  EXPECT_DOUBLE_EQ(last_command().twist.linear.x, 0.0);
 }
 
 TEST_F(PathFollowerFixture, AnAlignmentThatNeverFinishesIsReportedAsNotOk)
@@ -456,7 +477,8 @@ TEST_F(PathFollowerFixture, AnAlignmentThatNeverFinishesIsReportedAsNotOk)
 
 TEST_F(PathFollowerFixture, AParameterOutsideItsRangeStopsTheNodeFromStarting)
 {
-  EXPECT_THROW(start({rclcpp::Parameter("min_lookahead_dist", 0.0)}), std::runtime_error);
+  EXPECT_THROW(
+    start({rclcpp::Parameter("pure_pursuit.min_lookahead_dist", 0.0)}), std::runtime_error);
   EXPECT_THROW(start({rclcpp::Parameter("path_source", "bogus")}), std::runtime_error);
   EXPECT_THROW(start({rclcpp::Parameter("update_frequency", 0.0)}), std::runtime_error);
 }

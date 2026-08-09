@@ -47,6 +47,12 @@ void PathInput::reject(std::string detail)
   rejection_ = std::move(detail);
 }
 
+void PathInput::clear()
+{
+  snapshot_.reset();
+  rejection_.clear();
+}
+
 PathInput::Reading PathInput::read(const rclcpp::Time & now) const
 {
   Reading reading;

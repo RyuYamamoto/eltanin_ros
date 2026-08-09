@@ -120,6 +120,20 @@ TEST(PathInputTest, AcceptingClearsTheRejectionRecord)
   EXPECT_TRUE(input.rejection_detail().empty());
 }
 
+TEST(PathInputTest, ClearingForgetsThePathAndTheRejection)
+{
+  PathInput input{std::nullopt};
+  input.accept(make_snapshot(10.0));
+  input.reject("frame_id is 'odom'");
+
+  input.clear();
+
+  const PathInput::Reading reading = input.read(at(11.0));
+  EXPECT_EQ(reading.state, State::NeverReceived);
+  EXPECT_EQ(reading.snapshot.path, nullptr);
+  EXPECT_TRUE(input.rejection_detail().empty());
+}
+
 TEST(PathInputTest, AnEmptyPathIsAvailableAndTheNodeDecidesWhatThatMeans)
 {
   PathInput input{std::nullopt};

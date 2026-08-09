@@ -16,6 +16,7 @@
 
 #include "src/diagnostic.hpp"
 
+#include <eltanin/control/follower_factory.hpp>
 #include <eltanin_ros_common/geometry_conversion.hpp>
 #include <eltanin_ros_common/path_conversion.hpp>
 #include <eltanin_ros_common/trajectory_conversion.hpp>
@@ -26,6 +27,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -53,22 +55,38 @@ const rclcpp::Duration NO_TF_WAIT = rclcpp::Duration::from_nanoseconds(0);
   throw std::runtime_error(line);
 }
 
+/// Declared without a fallback: a key missing from the configuration stops the node naming it,
+/// rather than running on a value nobody chose.
 template <class T>
-T require_parameter(rclcpp::Node & node, const char * key, const T & fallback)
+T require_parameter(rclcpp::Node & node, const char * key)
 {
   try {
     if (!node.has_parameter(key)) {
-      node.declare_parameter(key, fallback);
+      node.declare_parameter<T>(key);
     }
     return node.get_parameter(key).get_value<T>();
+  } catch (const rclcpp::exceptions::ParameterUninitializedException &) {
+    refuse_to_start(
+      node, diagnostic::rejected(key, "is not set; every key has to come from a config"));
   } catch (const std::runtime_error & error) {
     refuse_to_start(node, diagnostic::rejected(key, diagnostic::flatten(error.what())));
   }
 }
 
-PathSource require_path_source(rclcpp::Node & node, PathSource fallback)
+/// declare_parameter hands back an int64; only the mechanical range is checked here.
+int require_int(rclcpp::Node & node, const char * key)
 {
-  const auto name = require_parameter<std::string>(node, KEY_PATH_SOURCE, name_of(fallback));
+  const auto value = require_parameter<std::int64_t>(node, key);
+  if (value < std::numeric_limits<int>::min() || value > std::numeric_limits<int>::max()) {
+    refuse_to_start(
+      node, diagnostic::rejected(key, "is " + std::to_string(value) + ", not an int"));
+  }
+  return static_cast<int>(value);
+}
+
+PathSource require_path_source(rclcpp::Node & node)
+{
+  const auto name = require_parameter<std::string>(node, KEY_PATH_SOURCE);
   const std::optional<PathSource> source = to_path_source(name);
   if (!source.has_value()) {
     refuse_to_start(
@@ -79,44 +97,88 @@ PathSource require_path_source(rclcpp::Node & node, PathSource fallback)
   return *source;
 }
 
+eltanin::control::FollowerType require_follower_type(rclcpp::Node & node)
+{
+  const auto name = require_parameter<std::string>(node, KEY_FOLLOWER_TYPE);
+  const std::optional<eltanin::control::FollowerType> type =
+    eltanin::control::to_follower_type(name);
+  if (!type.has_value()) {
+    refuse_to_start(
+      node, diagnostic::rejected(
+              KEY_FOLLOWER_TYPE, "is '" + name + "', not '" +
+                                   name_of(eltanin::control::FollowerType::PurePursuit) + "' or '" +
+                                   name_of(eltanin::control::FollowerType::Mpc) + "'"));
+  }
+  return *type;
+}
+
+void require_pursuit_parameters(rclcpp::Node & node, eltanin::control::PurePursuitParams & pursuit)
+{
+  pursuit.desired_linear_vel = require_parameter<double>(node, KEY_DESIRED_LINEAR_VEL);
+  pursuit.yaw_tolerance = require_parameter<double>(node, KEY_YAW_TOLERANCE);
+  pursuit.lookahead_time = require_parameter<double>(node, KEY_LOOKAHEAD_TIME);
+  pursuit.min_lookahead_dist = require_parameter<double>(node, KEY_MIN_LOOKAHEAD_DIST);
+}
+
+/// Declared only where the follower exists, so mpc.* never reads as a key that quietly does
+/// nothing.
+void require_mpc_parameters(rclcpp::Node & node, eltanin::control::FollowerFactoryParams & follower)
+{
+#ifdef ELTANIN_WITH_MPC
+  eltanin::control::MpcFollowerParams & mpc = follower.mpc;
+  mpc.prediction_horizon = require_int(node, KEY_MPC_PREDICTION_HORIZON);
+  mpc.prediction_dt = require_parameter<double>(node, KEY_MPC_PREDICTION_DT);
+  mpc.max_linear_vel = require_parameter<double>(node, KEY_MPC_MAX_LINEAR_VEL);
+  mpc.min_linear_vel = require_parameter<double>(node, KEY_MPC_MIN_LINEAR_VEL);
+  mpc.max_linear_accel = require_parameter<double>(node, KEY_MPC_MAX_LINEAR_ACCEL);
+  mpc.max_angular_accel = require_parameter<double>(node, KEY_MPC_MAX_ANGULAR_ACCEL);
+  mpc.weight_lateral = require_parameter<double>(node, KEY_MPC_WEIGHT_LATERAL);
+  mpc.weight_longitudinal = require_parameter<double>(node, KEY_MPC_WEIGHT_LONGITUDINAL);
+  mpc.weight_yaw = require_parameter<double>(node, KEY_MPC_WEIGHT_YAW);
+  mpc.weight_linear_vel = require_parameter<double>(node, KEY_MPC_WEIGHT_LINEAR_VEL);
+  mpc.weight_angular_vel = require_parameter<double>(node, KEY_MPC_WEIGHT_ANGULAR_VEL);
+  mpc.weight_linear_vel_rate = require_parameter<double>(node, KEY_MPC_WEIGHT_LINEAR_VEL_RATE);
+  mpc.weight_angular_vel_rate = require_parameter<double>(node, KEY_MPC_WEIGHT_ANGULAR_VEL_RATE);
+  mpc.terminal_weight_scale = require_parameter<double>(node, KEY_MPC_TERMINAL_WEIGHT_SCALE);
+  mpc.yaw_tolerance = require_parameter<double>(node, KEY_MPC_YAW_TOLERANCE);
+  mpc.max_heading_error = require_parameter<double>(node, KEY_MPC_MAX_HEADING_ERROR);
+  mpc.max_consecutive_failures = require_int(node, KEY_MPC_MAX_CONSECUTIVE_FAILURES);
+  mpc.solver.max_iterations = require_int(node, KEY_MPC_SOLVER_MAX_ITERATIONS);
+  mpc.solver.eps_abs = require_parameter<double>(node, KEY_MPC_SOLVER_EPS_ABS);
+  mpc.solver.eps_rel = require_parameter<double>(node, KEY_MPC_SOLVER_EPS_REL);
+  mpc.solver.warm_start = require_parameter<bool>(node, KEY_MPC_SOLVER_WARM_START);
+  mpc.solver.polish = require_parameter<bool>(node, KEY_MPC_SOLVER_POLISH);
+#else
+  (void)node;
+  (void)follower;
+#endif
+}
+
 /// Read once at construction and never again; the defaults come from eltanin, not from literals.
 FollowerParameters require_parameters(
   rclcpp::Node & node, const eltanin_ros_common::VelocityLimits & limits)
 {
-  const FollowerParameters defaults;
   FollowerParameters parameters;
-  parameters.update_frequency =
-    require_parameter(node, KEY_UPDATE_FREQUENCY, defaults.update_frequency);
-  parameters.path_source = require_path_source(node, defaults.path_source);
-  parameters.pursuit.desired_linear_vel =
-    require_parameter(node, KEY_DESIRED_LINEAR_VEL, defaults.pursuit.desired_linear_vel);
-  parameters.pursuit.yaw_tolerance =
-    require_parameter(node, KEY_YAW_TOLERANCE, defaults.pursuit.yaw_tolerance);
-  parameters.pursuit.lookahead_time =
-    require_parameter(node, KEY_LOOKAHEAD_TIME, defaults.pursuit.lookahead_time);
-  parameters.pursuit.min_lookahead_dist =
-    require_parameter(node, KEY_MIN_LOOKAHEAD_DIST, defaults.pursuit.min_lookahead_dist);
-  parameters.approach.xy_goal_tolerance =
-    require_parameter(node, KEY_XY_GOAL_TOLERANCE, defaults.approach.xy_goal_tolerance);
-  parameters.approach.yaw_goal_tolerance =
-    require_parameter(node, KEY_YAW_GOAL_TOLERANCE, defaults.approach.yaw_goal_tolerance);
-  parameters.approach.approach_distance =
-    require_parameter(node, KEY_APPROACH_DISTANCE, defaults.approach.approach_distance);
-  parameters.approach.approach_decel =
-    require_parameter(node, KEY_APPROACH_DECEL, defaults.approach.approach_decel);
-  parameters.approach.yaw_align_timeout =
-    require_parameter(node, KEY_YAW_ALIGN_TIMEOUT, defaults.approach.yaw_align_timeout);
-  parameters.trajectory_timeout =
-    require_parameter(node, KEY_TRAJECTORY_TIMEOUT, defaults.trajectory_timeout);
-  parameters.path_timeout = require_parameter(node, KEY_PATH_TIMEOUT, defaults.path_timeout);
+  parameters.update_frequency = require_parameter<double>(node, KEY_UPDATE_FREQUENCY);
+  parameters.path_source = require_path_source(node);
+  parameters.follower.type = require_follower_type(node);
+  require_pursuit_parameters(node, parameters.follower.pure_pursuit);
+  require_mpc_parameters(node, parameters.follower);
+  parameters.approach.xy_goal_tolerance = require_parameter<double>(node, KEY_XY_GOAL_TOLERANCE);
+  parameters.approach.yaw_goal_tolerance = require_parameter<double>(node, KEY_YAW_GOAL_TOLERANCE);
+  parameters.approach.approach_distance = require_parameter<double>(node, KEY_APPROACH_DISTANCE);
+  parameters.approach.approach_decel = require_parameter<double>(node, KEY_APPROACH_DECEL);
+  parameters.approach.yaw_align_timeout = require_parameter<double>(node, KEY_YAW_ALIGN_TIMEOUT);
+  parameters.trajectory_timeout = require_parameter<double>(node, KEY_TRAJECTORY_TIMEOUT);
+  parameters.path_timeout = require_parameter<double>(node, KEY_PATH_TIMEOUT);
 
   // Before validate(), which checks the values the two create() calls are actually handed.
   const VelocityClamp clamp = apply_velocity_limits(parameters, limits);
   if (clamp.clamped) {
     RCLCPP_WARN(
       node.get_logger(),
-      "%s %f m/s is above robot.max_linear_vel %f m/s; the cruise speed is that limit",
-      KEY_DESIRED_LINEAR_VEL, clamp.requested, clamp.applied);
+      "%s %f m/s is above robot.max_linear_vel %f m/s; the cruise speed is that limit", clamp.key,
+      clamp.requested, clamp.applied);
   }
 
   const eltanin_ros_common::ConversionStatus status = validate(parameters);
@@ -137,16 +199,18 @@ eltanin_ros_common::RobotProfile require_robot_profile(rclcpp::Node & node)
   return std::move(profile.value());
 }
 
-/// validate() has already named the offending value; create() itself carries no reason.
-eltanin::control::PurePursuit require_pursuit(
-  rclcpp::Node & node, const eltanin::control::PurePursuitParams & params)
+/// validate() has already named the offending value; the factory reports the class of failure.
+std::unique_ptr<eltanin::control::PathFollower> require_follower(
+  rclcpp::Node & node, const eltanin::control::FollowerFactoryParams & params)
 {
-  std::optional<eltanin::control::PurePursuit> pursuit =
-    eltanin::control::PurePursuit::create(params);
-  if (!pursuit.has_value()) {
-    refuse_to_start(node, diagnostic::rejected("the pure pursuit parameters", "eltanin refused"));
+  eltanin::control::FollowerResult result = eltanin::control::make_path_follower(params);
+  if (!result.has_value()) {
+    refuse_to_start(
+      node, diagnostic::rejected(
+              KEY_FOLLOWER_TYPE,
+              std::string("is '") + name_of(params.type) + "': " + to_string(result.error())));
   }
-  return std::move(*pursuit);
+  return result.take();
 }
 
 /// The same, for the approach; the two rejections stay distinguishable in the log.
@@ -183,11 +247,14 @@ PathFollower::PathFollower(const rclcpp::NodeOptions & options)
   profile_(require_robot_profile(*this)),
   parameters_(require_parameters(*this, profile_.limits())),
   clock_(get_clock()),
-  pursuit_(require_pursuit(*this, parameters_.pursuit)),
+  follower_(require_follower(*this, parameters_.follower)),
   approach_(require_approach(*this, parameters_.approach)),
   input_(deadline_of(parameters_)),
   tf_buffer_(get_clock())
 {
+  // Only a geometric follower has a lookahead point; the MPC leaves this null and publishes none.
+  pursuit_ = dynamic_cast<eltanin::control::PurePursuit *>(follower_.get());
+
   tf_buffer_.setCreateTimerInterface(std::make_shared<tf2_ros::CreateTimerROS>(
     get_node_base_interface(), get_node_timers_interface()));
   tf_listener_ = std::make_shared<tf2_ros::TransformListener>(tf_buffer_, this, true);
@@ -229,10 +296,10 @@ PathFollower::PathFollower(const rclcpp::NodeOptions & options)
     control_group_);
 
   RCLCPP_INFO(
-    get_logger(), "following %s at %f Hz, cruising at %f m/s",
+    get_logger(), "following %s at %f Hz with the %s follower",
     parameters_.path_source == PathSource::Trajectory ? trajectory_subscription_->get_topic_name()
                                                       : path_subscription_->get_topic_name(),
-    parameters_.update_frequency, parameters_.pursuit.desired_linear_vel);
+    parameters_.update_frequency, name_of(parameters_.follower.type));
 }
 
 void PathFollower::on_timer()
@@ -244,10 +311,13 @@ void PathFollower::on_timer()
 
 PathFollower::CycleOutcome PathFollower::run_cycle(const rclcpp::Time & now)
 {
-  // The PeriodicClock is not reset with them; that would make the next cycle a first tick.
+  // The held path goes with them. Clearing the controllers alone leaves the old path current for
+  // the cycle before the new one arrives, and the goal approach latches Reached on it again.
   if (reset_requested_.exchange(false)) {
-    pursuit_.reset();
+    follower_->reset();
     approach_.reset();
+    const std::lock_guard<std::mutex> lock(input_mutex_);
+    input_.clear();
   }
 
   const eltanin_ros_common::PeriodicClock::Tick tick = clock_.tick();
@@ -324,8 +394,10 @@ PathFollower::CycleOutcome PathFollower::run_cycle(const rclcpp::Time & now)
   if (composition::tracking_required(approach.state)) {
     // No measured twist: the follower substitutes the command it returned last cycle.
     tracking =
-      pursuit_.follow(eltanin::control::FollowerState{*robot, std::nullopt}, path, tick.seconds);
-    lookahead = pursuit_.lookahead();
+      follower_->follow(eltanin::control::FollowerState{*robot, std::nullopt}, path, tick.seconds);
+    if (pursuit_ != nullptr) {
+      lookahead = pursuit_->lookahead();
+    }
   }
 
   cycle.outcome = composition::compose(approach, tracking, lookahead);
@@ -432,8 +504,9 @@ void PathFollower::on_reset(
 {
   reset_requested_.store(true);
   response->success = true;
-  response->message =
-    diagnostic::line("the pursuit and the approach are reset before the next command");
+  response->message = diagnostic::line(
+    "the follower and its path are dropped before the next command; it stays at zero until a new "
+    "path arrives");
 }
 
 std::optional<eltanin::Pose2D> PathFollower::robot_pose()
