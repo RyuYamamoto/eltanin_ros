@@ -183,15 +183,30 @@ TEST(ComposeTest, AMissingTrackingResultDegradesToTheSafeSide)
 }
 #endif
 
-TEST(ComposeTest, ASolverFailureIsAFailureTheFollowerCannotRecoverFrom)
+TEST(ComposeTest, ASolverFailureKeepsTheDecelerationEltaninReturnedWithIt)
 {
+  // Zeroing here would throw away a deliberate deceleration ramp and stop the robot dead. eltanin
+  // reaches zero itself once max_consecutive_failures is exceeded.
   const Outcome outcome = compose(
-    make_approach(Approach::State::Inactive), make_tracking(FollowStatus::SolverFailed),
-    std::nullopt);
-  expect_zero_command(outcome);
+    make_approach(Approach::State::Inactive, INFINITE),
+    make_tracking(FollowStatus::SolverFailed, 0.2, 0.1), std::nullopt);
+
+  EXPECT_DOUBLE_EQ(outcome.command.linear.x(), 0.2);
+  EXPECT_DOUBLE_EQ(outcome.command.angular, 0.1);
   EXPECT_EQ(outcome.status, Diagnostic::STATUS_SOLVER_FAILED);
   EXPECT_EQ(outcome.reason, Diagnostic::REASON_CONTROLLER);
   EXPECT_FALSE(outcome.ok);
+  EXPECT_FALSE(outcome.has_lookahead);
+}
+
+TEST(ComposeTest, ASolverFailureIsStillHeldUnderTheApproachLimit)
+{
+  const Outcome outcome = compose(
+    make_approach(Approach::State::Approaching, 0.1),
+    make_tracking(FollowStatus::SolverFailed, 0.2, 0.1), std::nullopt);
+
+  EXPECT_DOUBLE_EQ(outcome.command.linear.x(), 0.1);
+  EXPECT_DOUBLE_EQ(outcome.command.angular, 0.05);
 }
 
 TEST(ComposeTest, AFollowerWithoutALookaheadTracksWithoutPublishingAPoint)

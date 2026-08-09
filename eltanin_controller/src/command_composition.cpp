@@ -40,6 +40,13 @@ Outcome controller_failure(const Approach::Result & approach, FollowStatus statu
   return outcome;
 }
 
+/// SolverFailed is the one failure that still carries a command: eltanin decelerates rather than
+/// dropping to zero, and reaches zero itself after max_consecutive_failures.
+bool carries_a_command(FollowStatus status) noexcept
+{
+  return status == FollowStatus::SolverFailed;
+}
+
 }  // namespace
 
 bool tracking_required(Approach::State state) noexcept
@@ -114,7 +121,12 @@ Outcome compose(
     return controller_failure(approach, FollowStatus::NoPath, false);
   }
   if (tracking->status != FollowStatus::Tracking) {
-    return controller_failure(approach, tracking->status, false);
+    Outcome outcome = controller_failure(approach, tracking->status, false);
+    if (carries_a_command(tracking->status)) {
+      outcome.command =
+        eltanin::control::detail::apply_linear_limit(tracking->command, approach.linear_vel_limit);
+    }
+    return outcome;
   }
 
   Outcome outcome;
