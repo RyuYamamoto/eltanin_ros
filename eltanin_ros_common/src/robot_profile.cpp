@@ -198,7 +198,8 @@ std::optional<std::string> validate_footprint_shape(const eltanin::Polygon2D & p
   return std::nullopt;
 }
 
-/// The condition of CollisionRadii::from_radii that is easiest to miss: inflation below the circle.
+/// The condition of DistanceTraversabilityModel::from_radii that is easiest to miss: inflation
+/// below the circle.
 std::optional<std::string> validate_inflation_radius(
   const eltanin::Polygon2D & polygon, double inflation_radius)
 {
@@ -308,13 +309,13 @@ ConversionResult<RobotProfile> declare_robot_profile(rclcpp::Node & node)
     return Result::failure(*error);
   }
 
-  const std::optional<eltanin::CollisionRadii> radii =
-    eltanin::CollisionRadii::from_footprint(shape, raw.inflation_radius);
-  if (!radii.has_value()) {
-    return Result::failure(unexplained("CollisionRadii::from_footprint"));
+  const std::optional<eltanin::DistanceTraversabilityModel> distance_model =
+    eltanin::DistanceTraversabilityModel::from_footprint(shape, raw.inflation_radius);
+  if (!distance_model.has_value()) {
+    return Result::failure(unexplained("DistanceTraversabilityModel::from_footprint"));
   }
   const std::optional<eltanin::map::InflationCostModel> inflation =
-    eltanin::map::InflationCostModel::create(*radii, raw.cost_scaling_factor);
+    eltanin::map::InflationCostModel::create(*distance_model, raw.cost_scaling_factor);
   if (!inflation.has_value()) {
     return Result::failure(unexplained("InflationCostModel::create"));
   }

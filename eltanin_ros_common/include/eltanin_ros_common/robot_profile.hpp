@@ -59,7 +59,10 @@ public:
   const eltanin::Polygon2D & footprint() const noexcept { return footprint_; }
 
   /// inscribed <= circumscribed <= inflation, computed by eltanin and never recomputed here.
-  const eltanin::CollisionRadii & radii() const noexcept { return inflation_.radii(); }
+  const eltanin::DistanceTraversabilityModel & distance_model() const noexcept
+  {
+    return inflation_.distance_model();
+  }
 
   /// Pass this to InflationLayer and read circumscribed_cost() from it; do not build a second one.
   const eltanin::map::InflationCostModel & inflation_cost_model() const noexcept

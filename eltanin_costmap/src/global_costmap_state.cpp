@@ -75,7 +75,7 @@ GlobalCostmapState::GlobalCostmapState(
 : costmap_(static_map.geometry(), eltanin::map::NO_INFORMATION),
   obstacle_layer_(add_layers(costmap_, static_map, inflation, inflate_unknown)),
   inflation_cells_(eltanin_costmap::inflation_cells(
-    inflation.radii().inflation_radius(), static_map.geometry().resolution())),
+    inflation.distance_model().inflation_radius(), static_map.geometry().resolution())),
   // Moved last, because every initializer above still reads the geometry off it.
   observations_(std::move(static_map))
 {

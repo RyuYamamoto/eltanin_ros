@@ -105,9 +105,9 @@ TEST_F(RobotProfileTest, DefaultsAreTheKachakaFootprint)
   ASSERT_TRUE(result.ok()) << result.error();
   const RobotProfile & profile = result.value();
   EXPECT_EQ(profile.footprint().size(), 4u);
-  EXPECT_NEAR(profile.radii().inscribed_radius(), 0.120, 1e-9);
-  EXPECT_NEAR(profile.radii().circumscribed_radius(), 0.26565, 1e-5);
-  EXPECT_NEAR(profile.radii().inflation_radius(), 0.55, 1e-9);
+  EXPECT_NEAR(profile.distance_model().inscribed_radius(), 0.120, 1e-9);
+  EXPECT_NEAR(profile.distance_model().circumscribed_radius(), 0.26565, 1e-5);
+  EXPECT_NEAR(profile.distance_model().inflation_radius(), 0.55, 1e-9);
   EXPECT_NEAR(profile.cost_scaling_factor(), 10.0, 1e-9);
   EXPECT_NEAR(profile.limits().max_linear_vel, 0.30, 1e-9);
   EXPECT_NEAR(profile.limits().max_angular_vel, 1.57, 1e-9);
@@ -137,7 +137,7 @@ TEST_F(RobotProfileTest, OverridesAreReadUnderTheDeclaredKeys)
   const ConversionResult<RobotProfile> result = declare_robot_profile(*node);
 
   ASSERT_TRUE(result.ok()) << result.error();
-  EXPECT_NEAR(result.value().radii().inflation_radius(), 0.80, 1e-9);
+  EXPECT_NEAR(result.value().distance_model().inflation_radius(), 0.80, 1e-9);
   EXPECT_NEAR(result.value().limits().max_linear_vel, 0.12, 1e-9);
   EXPECT_EQ(result.value().frames().base, "base_link");
 }
@@ -296,7 +296,8 @@ TEST_F(RobotProfileTest, ProfileCarriesTheInflationModel)
   EXPECT_EQ(model.cost_at_distance(0.0), eltanin::map::INSCRIBED_INFLATED_OBSTACLE);
   EXPECT_EQ(model.cost_at_distance(1.0), eltanin::map::FREE_SPACE);
   EXPECT_GE(model.circumscribed_cost(), 1);
-  EXPECT_EQ(model.radii().inscribed_radius(), result.value().radii().inscribed_radius());
+  EXPECT_EQ(
+    model.distance_model().inscribed_radius(), result.value().distance_model().inscribed_radius());
 }
 
 TEST_F(RobotProfileTest, FootprintIsNormalizedToCounterClockwise)

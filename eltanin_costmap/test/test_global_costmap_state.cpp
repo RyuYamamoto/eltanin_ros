@@ -31,7 +31,7 @@
 namespace
 {
 
-using eltanin::CollisionRadii;
+using eltanin::DistanceTraversabilityModel;
 using eltanin::map::CellRect;
 using eltanin::map::Costmap;
 using eltanin::map::FREE_SPACE;
@@ -56,8 +56,9 @@ constexpr double EXACT_INFLATION_RADIUS = 0.25;
 
 InflationCostModel make_inflation(double inflation_radius, double inscribed = 0.02)
 {
-  const auto radii = CollisionRadii::from_radii(inscribed, 2.0 * inscribed, inflation_radius);
-  const auto model = InflationCostModel::create(*radii, COST_SCALING_FACTOR);
+  const auto distance_model =
+    DistanceTraversabilityModel::from_radii(inscribed, 2.0 * inscribed, inflation_radius);
+  const auto model = InflationCostModel::create(*distance_model, COST_SCALING_FACTOR);
   return *model;
 }
 
