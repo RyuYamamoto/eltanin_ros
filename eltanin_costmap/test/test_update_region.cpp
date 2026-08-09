@@ -18,6 +18,7 @@
 
 #include <limits>
 #include <optional>
+#include <stdexcept>
 
 namespace
 {
@@ -199,7 +200,8 @@ TEST(PublishRectTest, KeepsTheTwoAxesApartOnANonSquareMap)
 TEST(PublishRectTest, HasNothingToPublishForADegenerateGeometry)
 {
   EXPECT_FALSE(publish_rect(CellRect{0, 0, 0, 0}, 1, MapGeometry{}).has_value());
-  EXPECT_FALSE(publish_rect(CellRect{0, 0, 0, 0}, 1, make_geometry(0, 5)).has_value());
+  // MapGeometry now refuses a zero axis, so publish_rect can only meet the default-constructed one.
+  EXPECT_THROW(make_geometry(0, 5), std::invalid_argument);
 }
 
 }  // namespace

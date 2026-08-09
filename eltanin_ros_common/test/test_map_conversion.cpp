@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <limits>
 #include <numbers>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -360,8 +361,8 @@ TEST(ToCostmapMsgTest, RejectsADegenerateCostmapInsteadOfPublishingIt)
   EXPECT_TRUE(contains(rejected.error(), "resolution"));
   EXPECT_TRUE(is_one_line(rejected.error()));
 
-  const auto no_cells = to_costmap_msg(make_costmap(0, 0, {}), "map", make_stamp(0, 0));
-  EXPECT_FALSE(no_cells.ok());
+  // MapGeometry now refuses zero dimensions, so no conversion can ever be handed such a map.
+  EXPECT_THROW(make_costmap(0, 0, {}), std::invalid_argument);
 
   eltanin::map::Costmap mismatched = make_costmap(2, 2, {0, 0, 0, 0});
   mismatched.data().pop_back();
@@ -414,7 +415,8 @@ TEST(ToCostmapMsgTest, KeepsResolutionExactlyBecauseTheInternalTopicIsFloat64)
 TEST(ToOccupancyGridTest, RejectsTheSameDegenerateMapsAsTheInternalTopic)
 {
   EXPECT_FALSE(to_occupancy_grid(eltanin::map::Costmap{}, "map", make_stamp(0, 0)).ok());
-  EXPECT_FALSE(to_occupancy_grid(make_costmap(0, 0, {}), "map", make_stamp(0, 0)).ok());
+  // MapGeometry now refuses zero dimensions, so no conversion can ever be handed such a map.
+  EXPECT_THROW(make_costmap(0, 0, {}), std::invalid_argument);
 }
 
 TEST(ToOccupancyGridTest, DoesNotSurviveARoundTripThroughTheStaticMapThresholds)
@@ -535,9 +537,8 @@ TEST(ToCostmapUpdateMsgTest, RejectsTheSameDegenerateMapsAsTheFullTopic)
   EXPECT_FALSE(no_geometry.ok());
   EXPECT_TRUE(contains(no_geometry.error(), "resolution"));
 
-  const auto no_cells =
-    to_costmap_update_msg(make_costmap(0, 0, {}), CellRect{0, 0, 0, 0}, "map", make_stamp(0, 0));
-  EXPECT_FALSE(no_cells.ok());
+  // MapGeometry now refuses zero dimensions, so no conversion can ever be handed such a map.
+  EXPECT_THROW(make_costmap(0, 0, {}), std::invalid_argument);
 }
 
 TEST(ToCostmapUpdateMsgTest, CarriesTheReservedValuesTheVisualizationTopicCannot)

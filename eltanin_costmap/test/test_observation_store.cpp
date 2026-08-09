@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <optional>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -307,9 +308,10 @@ TEST(ObservationStoreTest, ADegenerateWindowIsRefusedRatherThanIndexedIntoNothin
 {
   ObservationStore store(make_static_map());
   EXPECT_FALSE(store.absorb(Costmap{}).overlaps);
-  EXPECT_FALSE(store.absorb(make_map(0, 4, Eigen::Vector2d::Zero(), RESOLUTION)).overlaps);
-  EXPECT_FALSE(store.absorb(make_map(4, 0, Eigen::Vector2d::Zero(), RESOLUTION)).overlaps);
-  EXPECT_FALSE(store.absorb(make_map(2, 2, Eigen::Vector2d::Zero(), 0.0)).overlaps);
+  // MapGeometry now refuses these before absorb() can be handed them.
+  EXPECT_THROW(make_map(0, 4, Eigen::Vector2d::Zero(), RESOLUTION), std::invalid_argument);
+  EXPECT_THROW(make_map(4, 0, Eigen::Vector2d::Zero(), RESOLUTION), std::invalid_argument);
+  EXPECT_THROW(make_map(2, 2, Eigen::Vector2d::Zero(), 0.0), std::invalid_argument);
   EXPECT_EQ(store.size(), 0u);
 }
 
