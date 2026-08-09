@@ -26,6 +26,7 @@ endif()
 add_library(${PROJECT_NAME} SHARED
   src/command_composition.cpp
   src/follower_parameters.cpp
+  src/path_follower.cpp
   src/path_input.cpp)
 target_include_directories(${PROJECT_NAME} PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
@@ -42,7 +43,20 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
   ${std_srvs_TARGETS})
 target_compile_options(${PROJECT_NAME} PRIVATE ${warning_options})
 
+# NO_UNDEFINED_SYMBOLS below calls check_cxx_compiler_flag, which rclcpp_components does not
+# include itself, so the macro fails with "Unknown CMake command" without this line.
+include(CheckCXXCompilerFlag)
+# MultiThreadedExecutor: the timer, the one path subscription and ~/reset sit in separate
+# MutuallyExclusive callback groups, which a single-threaded executor would make meaningless.
+# NO_UNDEFINED_SYMBOLS turns a missing link into a build error rather than a dlopen failure.
+rclcpp_components_register_node(${PROJECT_NAME}
+  PLUGIN "eltanin_controller::PathFollower"
+  EXECUTABLE path_follower
+  EXECUTOR MultiThreadedExecutor
+  NO_UNDEFINED_SYMBOLS)
+
 install(DIRECTORY include/ DESTINATION include/${PROJECT_NAME})
+# Required: the generated executable dlopens lib/libeltanin_controller.so to find the component.
 install(TARGETS ${PROJECT_NAME} LIBRARY DESTINATION lib)
 
 if(BUILD_TESTING)
@@ -57,6 +71,12 @@ if(BUILD_TESTING)
     target_compile_options(${test_name} PRIVATE ${warning_options})
   endforeach()
 
+  # The only test in this package that calls rclcpp::init; the pure parts above do not need it.
+  # 120 s rather than 60: a 20 Hz timer watched over several cycles in a Debug CI build is slow.
+  ament_add_gtest(test_path_follower test/test_path_follower.cpp TIMEOUT 120)
+  target_link_libraries(test_path_follower ${PROJECT_NAME})
+  target_include_directories(test_path_follower PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_compile_options(test_path_follower PRIVATE ${warning_options})
 endif()
 
 ament_package()
