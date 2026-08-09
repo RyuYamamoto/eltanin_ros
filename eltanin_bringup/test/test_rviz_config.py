@@ -15,7 +15,7 @@
 """Keep rviz/eltanin.rviz pointed at topics that exist, in both directions.
 
 A display reads a topic, so something in the stack has to publish it; some of those publishers are
-switched on by a parameter, so the check is against config/navigation.yaml rather than a fixed
+switched on by a parameter, so the check is against the shipped node configs rather than a fixed
 list. A tool writes a topic, so the same launch file has to start something that reads it —
 otherwise the button is there and pressing it does nothing.
 """
@@ -23,13 +23,19 @@ otherwise the button is there and pressing it does nothing.
 import importlib.util
 from pathlib import Path
 
+from ament_index_python.packages import get_package_share_directory
 import yaml
 
 from launch.substitutions import TextSubstitution
 
 PACKAGE = Path(__file__).resolve().parents[1]
 RVIZ = PACKAGE / "rviz" / "eltanin.rviz"
-NAVIGATION = PACKAGE / "config" / "navigation.yaml"
+NAVIGATION_FILES = [
+    Path(get_package_share_directory("eltanin_costmap")) / "config" / "global_costmap.param.yaml",
+    Path(get_package_share_directory("eltanin_planner"))
+    / "config"
+    / "global_path_planner.param.yaml",
+]
 LAUNCH_FILE = PACKAGE / "launch" / "eltanin_bringup.launch.py"
 
 # Topic -> the parameter that has to be true for a publisher to exist. None means always.
@@ -96,8 +102,11 @@ def remapped_destinations():
 
 def enabled(gate):
     node, parameter = gate
-    document = yaml.safe_load(NAVIGATION.read_text(encoding="utf-8"))
-    return document.get(node, {}).get("ros__parameters", {}).get(parameter) is True
+    for path in NAVIGATION_FILES:
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if node in document:
+            return document[node].get("ros__parameters", {}).get(parameter) is True
+    return False
 
 
 def test_every_display_has_a_publisher():
@@ -116,7 +125,7 @@ def test_every_gated_publisher_is_switched_on():
     )
     assert not off, (
         f"{off} is displayed, but the parameter that creates its publisher is off in "
-        "config/navigation.yaml. A display whose publisher never exists is the navyu defect."
+        "the shipped node configs. A display whose publisher never exists is the navyu defect."
     )
 
 

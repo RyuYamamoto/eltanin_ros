@@ -274,10 +274,11 @@ footprint would be reported as a perfectly ordinary non-convex shape. After all 
 `create()` calls in `eltanin` are made for real, and a `nullopt` from any of them is a rejection even
 though no condition above explains it.
 
-The code defaults are the kachaka measurements, so a node with no parameters at all starts with the
-real robot's shape. `robot/kachaka.yaml` (task 22) repeats those numbers and **the yaml is the
-authority**; the code defaults are pinned by `test_robot_profile` so a drift is visible. A different
-robot must always be given its own profile. Write `robot.footprint` values **with a decimal point**:
+**There are no code defaults.** A profile that is missing a key stops the node with that key named,
+which is the only way a different robot cannot inherit kachaka's collision box by accident. The
+profiles ship from this package as `config/robot/<name>.yaml`, and every node package's tests start
+their node from one, so an incomplete profile fails in CI. Write `robot.footprint` values
+**with a decimal point**:
 `[0, 0, 1, 0]` is an integer array to the parameter server and is rejected — with one line saying
 so, not with a crash, but rejected.
 
@@ -896,7 +897,8 @@ Nothing persists between runs.
 | `use_rviz` | `true` | Start RViz with `rviz/eltanin.rviz`. |
 | `use_goal_pose_relay` | `true` | Start `goal_pose_relay`, which turns RViz's `2D Goal Pose` into a `compute_path_to_pose` goal. Off leaves the tool with nothing listening. |
 | `map` | empty | Map yaml for `nav2_map_server`. **Empty means no `map_server` at all**, and the static map then comes from whoever else publishes `/map`. **Omit the argument to get that**; `map:=''` is not a way to say it, because the shell hands `ros2 launch` the literal `map:=` and it answers *malformed launch argument*. |
-| `params_file` | `config/navigation.yaml` | Node-specific parameters, keyed by node name. |
+| `costmap_params_file` | `eltanin_costmap/config/global_costmap.param.yaml` | Every `global_costmap` key. The node has no defaults of its own. |
+| `planner_params_file` | `eltanin_planner/config/global_path_planner.param.yaml` | Every `global_path_planner` key. The node has no defaults of its own. |
 | `rviz_config` | `rviz/eltanin.rviz` | RViz configuration. |
 
 Every argument is declared, every declared argument is read, and `test_launch_file.py` fails if
@@ -905,7 +907,7 @@ changed nothing and `--show-args` did not list it.
 
 **Parameters are written once.** `config/robot/*.yaml` uses the `/**` wildcard, so `robot.*` and
 `frames.*` reach every node as the same number — which is what keeps `global_costmap`'s inflation
-threshold and `global_path_planner`'s `Free` boundary in agreement. `config/navigation.yaml` holds
+threshold and `global_path_planner`'s `Free` boundary in agreement. Each node's own config holds
 only what is specific to one node, keyed by node name. No key appears in both files. navyu had four
 copies of the same values and they had drifted apart.
 
@@ -971,7 +973,7 @@ the wrong place.
 | A frame mismatch is detected | A goal in `odom` is transformed and succeeds. A goal in a frame tf has never seen returns `outcome: 2`, and the log line names both frames, the stamp and the timeout. An empty `frame_id` is refused rather than assumed to be `map`. |
 
 Run on navyu's 4000x4000 map with the transforms of step 4, `use_rviz:=false`, `rmw_zenoh_cpp`, and
-the shipped `navigation.yaml` — so `planner_type` is `hybrid_astar`. `map_server` read the map in
+the shipped `global_path_planner.param.yaml` — so `planner_type` is `hybrid_astar`. `map_server` read the map in
 0.65 s and `global_costmap` built the whole area 0.33 s later; `lifecycle_bringup` drove both
 transitions without a manager node. **The search times below are hybrid A\*'s**: the same goal under
 `planner_type: astar` was measured at 68.5 ms, so a change to that parameter moves them by more than
@@ -1005,12 +1007,12 @@ they check fails at startup:
 |---|---|
 | `test_robot_profile_config.py` | A profile missing a key (it would fall back to the C++ default and stop describing the machine), a footprint written with integer literals, and a kachaka profile that has drifted from `declare_robot_profile()`'s defaults or stopped being the collision box. |
 | `test_navigation_config.py` | A node-name key no node answers to, a machine value written here as well as in `robot/*.yaml`, a number whose YAML spelling gives it the wrong parameter type, and smoother weights that diverge. |
-| `test_rviz_config.py` | A display whose topic nothing publishes, a display whose publisher is switched off in `navigation.yaml`, the wrong colour scheme on the costmap, and a tool whose topic no node started by this launch file reads. |
+| `test_rviz_config.py` | A display whose topic nothing publishes, a display whose publisher is switched off in the shipped node configs, the wrong colour scheme on the costmap, and a tool whose topic no node started by this launch file reads. |
 | `test_launch_file.py` | An argument read but not declared, an argument declared but not read, the single-threaded container, a component without `use_intra_process_comms`, and the two start-up paths passing different parameters. |
 
 The `test_rviz_config.py` gate is the one worth knowing about when adding a display: a topic that
 only exists when a parameter is true has to have that parameter turned on in the same commit. That is
-why `publish_footprint_path` is `true` in `navigation.yaml` — `FootprintPath` is in the RViz
+why `publish_footprint_path` is `true` in `global_path_planner.param.yaml` — `FootprintPath` is in the RViz
 configuration, and a display of a topic that is never published is the navyu defect this fence names.
 
 RViz's Map display logs one shader link error (`indexed_8bit_image.vert`, "active samplers with a
@@ -1138,6 +1140,53 @@ package go through `GridMap::data()` in one pass, which is why no `operator()` a
 row-major layout of `MapGeometry`, `OccupancyGrid` and `eltanin_msgs/Costmap` is identical, so no row
 flip or transpose is involved. (`eltanin::map_io::load_map` does flip rows, because PGM starts at the
 top; that does not apply to messages.)
+
+### Parameters have no defaults in code
+
+**Every node refuses to start on a key that is not set.** There are no fallbacks in
+`declare_parameter`, and `declare_robot_profile()` has none either. A missing key is one `ERROR`
+line naming it and a `std::runtime_error` from the constructor.
+
+This reverses design §7's F-14, which asked for a meaningful default behind every parameter, on the
+grounds that navyu crashed at startup on a key mismatch. **That reasoning is backwards.** Crashing
+on a key mismatch is the behaviour worth having: it is loud, immediate, and names the key. navyu's
+actual defect (N-6) was the same footprint declared in four nodes under keys that had drifted apart
+— fixed by making `declare_robot_profile()` the single declaration point, not by adding fallbacks.
+What the fallbacks added was a silent failure: a typo in a yaml key means the node runs on a code
+default and nobody notices. The worst case was the machine profile, whose defaults were kachaka's
+measurements, so any other robot's profile with a missing `robot.footprint` would have driven with
+kachaka's collision box.
+
+Consequently:
+
+| | |
+|---|---|
+| Every node ships a complete config | `eltanin_costmap/config/global_costmap.param.yaml`, `eltanin_planner/config/global_path_planner.param.yaml`, `eltanin_controller/config/path_follower.param.yaml`. The package that declares a key ships the file that sets it. |
+| The machine profile lives in `eltanin_ros_common` | `config/robot/<name>.yaml`. Every node package depends on it, so every node package's tests can read it without a dependency cycle. |
+| Each node's ROS test starts the node from those shipped files | That is what proves the file is complete; a key added to a node and not to its yaml fails in CI. |
+| `eltanin_bringup` composes, it does not own | `costmap_params_file` and `planner_params_file` point at the packages. There is no `navigation.yaml`. |
+
+**A launch argument cannot override a node-named key.** rcl resolves a parameter by how specific
+the node name is, not by the order the sources were given: a key under `path_follower:` beats the
+same key under `/**` however late `/**` arrives. An inline parameter dictionary in a launch file and
+a command-line `-p name:=value` **both land under `/**`**, so neither can override a shipped config.
+An argument that has to win must be written to a file under the node's own name;
+`eltanin_kachaka_demo/launch/kachaka_follower.launch.py` does that in an `OpaqueFunction`.
+
+### Tests that start nodes need their own ROS domain
+
+`colcon test` shares the ROS graph with whatever else is running. A live stack on the same machine
+makes `count_publishers()` see its publishers, and a `rmw_zenohd` router **retains `/tf_static`**,
+so a test that expects a transform lookup to fail sees it succeed. Run them isolated, and one
+package at a time where two packages publish the same topic names:
+
+```bash
+ROS_DOMAIN_ID=77 colcon test --executor sequential --packages-ignore eltanin
+```
+
+Frame names and node names should be private to the test as well
+(`eltanin_controller/test/test_path_follower.cpp` remaps both), but that alone is not enough: the
+domain is what actually separates them.
 
 ### Branches
 

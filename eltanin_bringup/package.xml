@@ -24,6 +24,7 @@
   <exec_depend>tf2_ros</exec_depend>
 
   <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>ament_index_python</test_depend>
 
   <!-- navyu_navigation is deliberately not a dependency, even though it supplies the default map
        (design section 10): this stack replaces navyu, and declaring it would stop eltanin_ros from

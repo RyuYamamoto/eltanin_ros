@@ -12,14 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License
 
-"""Keep config/navigation.yaml node-specific, keyed by the real node names, and correctly typed."""
+"""Keep each node's shipped config node-specific, keyed by its real name, and correctly typed."""
 
 from pathlib import Path
+
+from ament_index_python.packages import get_package_share_directory
 
 import pytest
 import yaml
 
-CONFIG = Path(__file__).resolve().parents[1] / "config" / "navigation.yaml"
+# The files ship from the packages that declare the keys; bringup only composes them.
+CONFIGS = {
+    "global_costmap": Path(get_package_share_directory("eltanin_costmap"))
+    / "config"
+    / "global_costmap.param.yaml",
+    "global_path_planner": Path(get_package_share_directory("eltanin_planner"))
+    / "config"
+    / "global_path_planner.param.yaml",
+}
 
 # Node names are fixed in the constructors, so a key that is not one of these reaches nothing.
 EXPECTED_NODES = {"global_costmap", "global_path_planner"}
@@ -88,11 +98,19 @@ EXPECTED = {
 
 
 def document():
-    return yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
+    merged = {}
+    for path in CONFIGS.values():
+        merged.update(yaml.safe_load(path.read_text(encoding="utf-8")))
+    return merged
 
 
 def parameters(node):
     return document()[node]["ros__parameters"]
+
+
+def test_each_file_carries_exactly_its_own_node():
+    for node, path in CONFIGS.items():
+        assert set(yaml.safe_load(path.read_text(encoding="utf-8"))) == {node}
 
 
 def test_top_level_keys_are_the_real_node_names():
@@ -149,7 +167,7 @@ def test_machine_values_are_not_repeated_here():
             for index, value in enumerate(node):
                 walk(value, f"{where}[{index}]")
 
-    walk(document(), "navigation.yaml")
+    walk(document(), "the shipped configs")
 
 
 def test_smoother_weights_converge():

@@ -38,7 +38,8 @@ EXPECTED_ARGUMENTS = {
     "use_rviz",
     "use_goal_pose_relay",
     "map",
-    "params_file",
+    "costmap_params_file",
+    "planner_params_file",
     "rviz_config",
 }
 

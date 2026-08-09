@@ -51,11 +51,18 @@ ARGUMENTS = [
         "from whoever else publishes it.",
     ),
     DeclareLaunchArgument(
-        "params_file",
+        "costmap_params_file",
         default_value=PathJoinSubstitution(
-            [FindPackageShare("eltanin_bringup"), "config", "navigation.yaml"]
+            [FindPackageShare("eltanin_costmap"), "config", "global_costmap.param.yaml"]
         ),
-        description="Node-specific parameters, keyed by node name.",
+        description="Every global_costmap key; the node has no defaults of its own.",
+    ),
+    DeclareLaunchArgument(
+        "planner_params_file",
+        default_value=PathJoinSubstitution(
+            [FindPackageShare("eltanin_planner"), "config", "global_path_planner.param.yaml"]
+        ),
+        description="Every global_path_planner key; the node has no defaults of its own.",
     ),
     DeclareLaunchArgument(
         "rviz_config",
@@ -78,14 +85,20 @@ def generate_launch_description():
 
     robot_params = PathJoinSubstitution(
         [
-            FindPackageShare("eltanin_bringup"),
+            FindPackageShare("eltanin_ros_common"),
             "config",
             "robot",
             [LaunchConfiguration("robot_profile"), ".yaml"],
         ]
     )
-    # The machine profile arrives through /**, the node file by node name. No key is in both.
-    parameters = [robot_params, LaunchConfiguration("params_file"), {"use_sim_time": use_sim_time}]
+    # The machine profile arrives through /**, the node files by node name. No key is in both, and
+    # each node file ships from the package that declares those keys.
+    parameters = [
+        robot_params,
+        LaunchConfiguration("costmap_params_file"),
+        LaunchConfiguration("planner_params_file"),
+        {"use_sim_time": use_sim_time},
+    ]
 
     # 16 MB of costmap crosses this boundary on every update, and nothing needs a copy of it.
     intra_process = [{"use_intra_process_comms": True}]

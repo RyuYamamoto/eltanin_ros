@@ -15,7 +15,6 @@ if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   # Fences over the configuration itself: none of what they check fails at startup.
   foreach(test_name
-      test_robot_profile_config
       test_navigation_config
       test_rviz_config
       test_launch_file)
