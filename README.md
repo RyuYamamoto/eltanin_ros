@@ -142,7 +142,7 @@ creates it, so that nothing looks available before it is.
 | `eltanin_ros_common` | conversions, clock, watchdog, TF, parameter validation | **conversions, clock, watchdog and robot profile implemented**; the TF helper stays inside `global_path_planner` until a second user appears |
 | `eltanin_costmap` | `global_costmap` and `local_map` nodes | **`global_costmap` implemented**; `local_map` in task 15 |
 | `eltanin_planner` | `global_path_planner` and `local_path_planner` nodes | **`global_path_planner` implemented**; `local_path_planner` in tasks 17 and 19 |
-| `eltanin_controller` | `path_follower` and `collision_predictor` nodes | not implemented (tasks 11, 12) |
+| `eltanin_controller` | `path_follower` and `collision_predictor` nodes | **`path_follower` implemented**; `collision_predictor` in task 12 |
 | `eltanin_navigator` | orchestrator | not implemented (tasks 13, 21) |
 | `eltanin_simulator` | `simple_simulator` node | not implemented (task 10) |
 | `eltanin_bringup` | launch / config / rviz / map, plus the `goal_pose_relay` script | **`eltanin_bringup.launch.py` implemented**; simulation and kachaka bringup in tasks 10 and 22 |
@@ -157,7 +157,7 @@ from the header itself: one that includes `<rclcpp/...>` is a runtime piece.
 
 | Target | Headers | `rclcpp` |
 |---|---|---|
-| `eltanin_ros_common` | `conversion_result.hpp`, `cost_conversion.hpp`, `geometry_conversion.hpp`, `map_conversion.hpp`, `path_conversion.hpp`, `scan_conversion.hpp`, `warn_once.hpp` | no |
+| `eltanin_ros_common` | `conversion_result.hpp`, `cost_conversion.hpp`, `geometry_conversion.hpp`, `map_conversion.hpp`, `marker_conversion.hpp`, `path_conversion.hpp`, `scan_conversion.hpp`, `trajectory_conversion.hpp`, `warn_once.hpp` | no |
 | `eltanin_ros_common_runtime` | `stale_input.hpp`, `timing.hpp`, `robot_profile.hpp` | yes |
 
 Both are installed through one export set, so a downstream package gets them from a single
@@ -169,7 +169,13 @@ construct a node call `rclcpp::init()`, and today that is one file, `test_robot_
 ### The conversion layer
 
 Everything that crosses between `eltanin`'s types and ROS 2 messages is converted here and nowhere
-else: cost value ranges, quaternions, twists, transforms, scans, maps and paths.
+else: cost value ranges, quaternions, twists, transforms, scans, maps, paths and trajectories.
+
+`to_path()` is overloaded for `nav_msgs/Path` and for `eltanin_msgs/Trajectory2D`, so the caller
+picks by argument type rather than by name. The `Trajectory2D` form **drops the velocity
+annotation**: `eltanin` has no trajectory type and its follower cannot consume a velocity profile
+yet. There is no inverse, because nothing produces a `Trajectory2D` until `local_path_planner`
+exists.
 
 Conversions never throw. A conversion that can fail returns `ConversionResult<T>`, a check that
 produces no value returns `ConversionStatus`, and a rejection carries **one line** naming the frame,
@@ -374,7 +380,7 @@ Recorded here rather than by editing `docs/design/eltaninnavyuros.md`, same as f
 
 - §6.9 says `StaleInput::get(now)` returns `nullopt` when stale. It returns a pointer instead;
   `std::optional<T>` would copy a 16 MB costmap every cycle.
-- §6.9 counts nine headers for this package. There are ten public ones: the seven of the conversion
+- §6.9 counts nine headers for this package. There are twelve public ones: the nine of the conversion
   layer and the three runtime pieces. `outcome_conversion.hpp` is not among them (tasks 20 and 21),
   and `src/diagnostic.hpp` is private and not installed.
 - §4.3 (D-25) lists the smoother weights among the `create()` calls that return `nullopt`. They are
@@ -575,6 +581,212 @@ runs it at `-O0`:
 - §6.3 calls the successful outcome "reached". In a planner it means a path was produced.
 - §6.3 does not say that the pre-checks must track `eltanin`'s `plan()`. They must, in order, radius
   and model; see the duplication note above.
+
+## `eltanin_controller`
+
+One node so far: `path_follower`. It turns a path into a **requested** velocity on
+`~/cmd_vel_raw`. It is not the owner of `/cmd_vel` — the limiting and the final say belong to
+`collision_predictor` (task 12), which is also the only consumer of `~/cmd_vel_raw`. Until that node
+exists, nothing drives the robot from here; what this node produces is observable on the topic and
+nowhere else.
+
+### The publish never stops, and that is a property of the code
+
+navyu returned from its control callback without publishing anything when it had no path or could
+not find the robot, which leaves the last command sitting on the driver. Here every failure is a
+value returned from `run_cycle()`, and `on_timer()` is two lines: run the cycle, publish the cycle.
+There is no early `return` in `on_timer()` to forget a publish in, so "a zero command still goes out"
+is not a rule a reviewer has to check. `~/cmd_vel_raw` and `~/follower_state` are published on every
+cycle without exception; `~/lookahead_point` only while tracking, because the point is zero
+otherwise and drawing it at the origin would be a lie.
+
+### The composition, and why `apply_linear_limit()` is not `std::min`
+
+`GoalApproach` runs first every cycle. Its state decides whether `PurePursuit` runs at all:
+
+| `approach.state` | what happens | command |
+|---|---|---|
+| `Reached` | terminal, latched | zero |
+| `AlignmentTimeout` | terminal, latched | zero |
+| `Aligning` | **`PurePursuit` is not called** | `approach.command` |
+| `Inactive` / `Approaching` | `PurePursuit` runs | `apply_linear_limit(tracking, approach.linear_vel_limit)` |
+
+Not calling `PurePursuit` while aligning follows `eltanin`'s own `examples/navigation_loop.hpp`,
+which is the only primary source for the order; the pseudocode in `control-design.md` §12.1 reads as
+if the final turn were also zeroed, and a robot that never turns at the goal is the result.
+
+The limit is applied with `eltanin::control::detail::apply_linear_limit()`, which scales the whole
+twist so `w / v` is preserved. Capping `linear.x` alone with `std::min` leaves the angular velocity
+untouched and inflates the curvature exactly where the robot is slowing into the goal, which is the
+oscillation the approach exists to remove. `test_command_composition.cpp` pins the numbers:
+`v = 0.5, w = 0.4` under a limit of `0.25` becomes `(0.25, 0.2)`, and the `std::min` version's
+`(0.25, 0.4)` fails the test.
+
+`compose()` is the only place either result is read, which is what kept the move to `eltanin`'s
+`PathFollower` interface — `compute()` becoming `follow()`, `PurePursuit::Result` becoming
+`FollowResult` — down to that one function, its signature and its tests.
+
+### `ok = false` means three things, and the navigator can treat it as one
+
+`~/follower_state` carries `ok`. It is false only where the follower cannot recover on its own and
+would sit at zero forever while the upstream keeps sending the same input:
+
+- `GoalApproach` reported `AlignmentTimeout` — it latches until `~/reset`
+- the follower reported `NoPath`
+- the follower reported `GoalReached` before `GoalApproach` accepted the goal
+- the follower reported `SolverFailed`, which pure pursuit never does and a solving follower will
+
+Everything on the input side — no path yet, stale, empty, wrong frame, no transform, no usable
+elapsed time — leaves `ok` true and is reported through `reason` and `message` instead. Those clear
+themselves the moment the upstream comes back, and the navigator watches `local_map` and `/cmd_vel`
+for itself. So the navigator's rule can be exactly "`ok == false` is a stopping trigger".
+
+`NoPath` in that list is defensive: it is returned only for an empty path, and the node rejects an
+empty path before the follower is reached. A one-pose path comes back as `GoalReached`, not
+`NoPath`.
+
+### Nothing resets the follower except `~/reset`
+
+The follower never resets itself when the path changes. Whether a replan should drop the velocity
+ramp depends on **why** the replan happened, and only the navigator knows that: a replan triggered
+by an observation while driving must not decelerate, one triggered by a stop must. So `~/reset`
+(`std_srvs/Trigger`) is the single entrance. The service sets a flag and returns immediately;
+`success` is always true and the message says the reset applies before the next command, because
+claiming it already happened would be a lie. The `PeriodicClock` is deliberately not reset with the
+two controllers — that would make the next cycle a first tick and add one extra zero command.
+
+**Operational consequence while there is no navigator:** `Reached` and `AlignmentTimeout` latch, so
+after the first goal the follower will not follow a second path until `~/reset` is called by hand.
+`approach_state` stays at `REACHED` on `~/follower_state`, so the state is visible rather than
+mysterious.
+
+```bash
+ros2 service call /path_follower/reset std_srvs/srv/Trigger
+```
+
+### One input, chosen at startup, with two different meanings of "too old"
+
+`path_source` selects which subscription is created, and only one is:
+
+| `path_source` | topic | type | deadline |
+|---|---|---|---|
+| `path` (default) | `global_path_planner/global_path` | `nav_msgs/Path` | `path_timeout`, default **0 = none** |
+| `trajectory` | `local_path_planner/local_trajectory` | `eltanin_msgs/Trajectory2D` | `trajectory_timeout`, default 0.5 s, must be positive |
+
+The two deadlines are separate parameters because the inputs are not comparable. A global path is
+published once per replan, so a 0.5 s deadline would make it stale immediately and the follower
+would sit at zero forever; a local trajectory arrives at the control rate, so no deadline at all
+would be the navyu failure again. `path_timeout: 0` therefore means "no deadline" — not a very long
+one — and `PathInput` implements that rather than `StaleInput`, whose rule that a non-positive
+timeout is always stale exists on purpose and is left alone. Where there is a deadline it is checked
+on both sides: a stamp from the future is stale too.
+
+Both topic names are relative and can be remapped. A path whose `header.frame_id` is not `frames.map`
+is rejected rather than transformed: transforming periodic input would turn a tf failure into a third
+state that is neither "no path" nor "an old path". A rejection does not throw away a path already
+being followed — it only declines the new one.
+
+The velocity annotation on `Trajectory2D` (`linear_velocity`, `angular_velocity`, `time_from_start`)
+is dropped by `eltanin_ros_common::to_path()`, because `eltanin` has no trajectory type and
+`PurePursuit` cannot consume a velocity profile yet.
+
+### What the defaults actually do
+
+The node declares no `max_angular_vel` of its own: `robot.max_angular_vel` is fed into both
+generators, as `eltanin`'s `control-design.md` §12.2 asks. `desired_linear_vel` is a cruise speed
+rather than a body limit, so it is declared — but it is capped at `robot.max_linear_vel` with a
+`WARN` rather than refused, or the default profile could not start. With the shipped defaults that
+cap fires:
+
+| | default | effective | from |
+|---|---|---|---|
+| `desired_linear_vel` | 0.5 | **0.30** | capped at `robot.max_linear_vel`, one `WARN` line |
+| `max_angular_vel` | not declared | **1.57** | `robot.max_angular_vel` |
+| in-place turn rate | — | **0.785 rad/s** | `PurePursuit` turns at half of `max_angular_vel` |
+| `dt` bound for the in-place turn | — | **0.089 s** | `yaw_tolerance / (0.5 * max_angular_vel)` |
+
+That last row is worth watching. At 20 Hz the cycle is 0.05 s, so the margin is 1.78x, not the 2.8x
+the design assumed with `eltanin`'s own default of 1.0 rad/s. Above the bound the bang-bang in-place
+turn overshoots the tolerance band every cycle and the robot spins without setting off. It applies
+only to `PurePursuit`'s two in-place turns — the initial alignment and the re-alignment near the
+last pose. `GoalApproach`'s final turn is proportional and converges for any `dt` below 0.5 s.
+
+`~/follower_state` publishes `control_dt` every cycle so the real distribution can be read with
+`ros2 topic echo` instead of guessed. If it does turn out to be a problem, lower
+`robot.max_angular_vel` or raise `yaw_tolerance`; raising `update_frequency` is the last resort,
+since more cycles is also more jitter.
+
+### The two `eltanin` calls are not wrapped in a `try`
+
+`GoalApproach::compute()` and `PathFollower::follow()` both throw `std::invalid_argument` on a
+non-finite pose or a non-positive `dt`. Neither can arrive: `to_transform2d()` validates the pose
+before it becomes one, and
+`tick.usable()` is the only gate `dt` passes through. Catching would hide the day one of those two
+stops holding. If the process does die, the system still fails safe — `~/cmd_vel_raw` stops, and
+`collision_predictor`'s `cmd_timeout` zeroes `/cmd_vel`.
+
+### Parameters and startup
+
+`update_frequency` 20.0 / `path_source` `path` / `desired_linear_vel` 0.5 / `yaw_tolerance` 0.07 /
+`lookahead_time` 0.1 / `min_lookahead_dist` 0.3 / `xy_goal_tolerance` 0.10 /
+`yaw_goal_tolerance` 0.10 / `approach_distance` 0.5 / `approach_decel` 0.5 /
+`yaw_align_timeout` 5.0 / `trajectory_timeout` 0.5 / `path_timeout` 0.0.
+
+There is no `tf_lookup_timeout`: a periodic consumer keeps a timeout of 0, and a parameter would let
+that be configured away. There is no `follower_type` either, because there is one follower.
+
+A value the node cannot use is one `ERROR` line and a `std::runtime_error` from the constructor —
+a load failure under `ros2 component load`, an abort under `ros2 run`. `validate()` repeats the
+conditions `PurePursuit::create()` and `GoalApproach::create()` check, in their order, on purpose:
+`create()` returns a bare `std::optional` and cannot say which value it disliked, so the line that
+names the parameter can only be written here.
+
+### Following a path by hand
+
+`path_follower` is not in `eltanin_bringup.launch.py` yet; it goes in together with
+`collision_predictor` in task 12, since a `~/cmd_vel_raw` nobody subscribes to is dead wiring.
+
+```bash
+ros2 launch eltanin_bringup eltanin_bringup.launch.py map:=<path-to-map.yaml>
+ros2 run tf2_ros static_transform_publisher --frame-id map --child-frame-id odom
+ros2 run tf2_ros static_transform_publisher --frame-id odom --child-frame-id base_footprint
+
+ros2 run eltanin_controller path_follower
+ros2 topic echo /path_follower/cmd_vel_raw
+ros2 topic echo /path_follower/follower_state
+```
+
+Give a goal with RViz's `2D Goal Pose`. `~/global_path` is `volatile` and published once per goal,
+so a `path_follower` started after the planner has to be given the goal again.
+
+### Corrections to the design document
+
+- §6.5, D-17, §8.2 and §10 S4 all assume `PurePursuit::Status` gains an `Approaching` value. It never
+  did; approach is `GoalApproach::State`'s vocabulary alone (`eltanin`'s `control-design.md` §12.6).
+- §6.5 names "`control::PurePursuit` (plus the velocity-consuming overload from E-3)". The overload
+  does not exist yet, so **the velocity annotation on `Trajectory2D` is dropped**.
+- §6.5 says a cycle with `dt <= 0` is skipped. It is skipped as far as `eltanin` goes, but
+  `~/cmd_vel_raw` and `~/follower_state` are still published: no path in this node stops the publish.
+- §6.5 left `~/follower_state` as "reuse part of `NavigationState`, or put it in diagnostics".
+  `eltanin_msgs/FollowerDiagnostic` was added instead — `NavigationState`'s `STATE_*` are the seven
+  states of the navigator's machine and say nothing about a follower. **The topic name is still
+  `~/follower_state`; only the type is named `FollowerDiagnostic`**, because `eltanin` is introducing
+  `control::FollowerState` as the *input* to its follower and one name with two opposite meanings in
+  the same translation unit is worse than a slightly indirect one.
+- §6.5 lists `max_angular_vel` among the node's parameters. It is not declared here;
+  `robot.max_angular_vel` reaches both generators.
+- `PurePursuit::Status::NoPath` is returned only for an empty path, which the node rejects before
+  `compute()`. A one-pose path returns `GoalReached`. `NoPath` is reachable in unit tests only.
+- §6.5's `dt` bound is stated for `max_angular_vel` 1.0. With `robot.max_angular_vel`'s default of
+  1.57 it is **0.089 s**, not 0.14 s, and it binds only `PurePursuit`'s bang-bang in-place turns;
+  `GoalApproach`'s final turn is proportional and unaffected.
+- §6.5 assumes one follower. `eltanin` now has a `PathFollower` base class, a `FollowStatus` with a
+  fourth `SolverFailed` value, and an MPC behind `ELTANIN_ENABLE_MPC` (default off, and
+  `eltanin_vendor` does not pass it). This node calls `follow()` and reads `FollowResult`, but builds
+  **no switching abstraction**: it holds a `PurePursuit` by value and declares no `follower_type`,
+  because the alternative follower is not in the vendored build. `follower_type`, a
+  `std::unique_ptr<PathFollower>`, a `pure_pursuit.*` / `mpc.*` parameter split and the odom
+  subscription an MPC needs for `FollowerState::twist` all belong to the task that turns the MPC on.
 
 ## `eltanin_bringup`
 

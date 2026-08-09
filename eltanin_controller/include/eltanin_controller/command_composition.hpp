@@ -31,7 +31,7 @@ namespace eltanin_controller::composition
 bool tracking_required(eltanin::control::GoalApproach::State state) noexcept;
 
 /// The FollowerDiagnostic value of each enumerator; changing either enum means changing this table.
-std::uint8_t to_wire(eltanin::control::PurePursuit::Status status) noexcept;
+std::uint8_t to_wire(eltanin::control::FollowStatus status) noexcept;
 
 /// Same table for the approach state; the declaration order is the wire format.
 std::uint8_t to_wire(eltanin::control::GoalApproach::State state) noexcept;
@@ -45,7 +45,7 @@ struct Outcome
   std::uint8_t reason{};
   /// False only for the three failures the follower cannot recover from by itself.
   bool ok{true};
-  /// True only while tracking; a point drawn from any other cycle would sit at the origin.
+  /// True only while tracking with a follower that has one; a point drawn otherwise would be zero.
   bool has_lookahead{false};
   std::size_t lookahead_index{0};
   Eigen::Vector2d lookahead_point{Eigen::Vector2d::Zero()};
@@ -57,7 +57,8 @@ Outcome input_failure(std::uint8_t reason) noexcept;
 /// The whole composition, and the only caller of apply_linear_limit(); never throws, never logs.
 Outcome compose(
   const eltanin::control::GoalApproach::Result & approach,
-  const std::optional<eltanin::control::PurePursuit::Result> & tracking) noexcept;
+  const std::optional<eltanin::control::FollowResult> & tracking,
+  const std::optional<eltanin::control::PurePursuit::Lookahead> & lookahead) noexcept;
 
 }  // namespace eltanin_controller::composition
 

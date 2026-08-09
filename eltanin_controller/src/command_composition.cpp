@@ -27,9 +27,10 @@ namespace
 using Diagnostic = eltanin_msgs::msg::FollowerDiagnostic;
 using Approach = eltanin::control::GoalApproach;
 using Pursuit = eltanin::control::PurePursuit;
+using eltanin::control::FollowStatus;
 
 /// The zero command the follower falls back to; eltanin returns it too, and never a stale one.
-Outcome controller_failure(const Approach::Result & approach, Pursuit::Status status, bool ok)
+Outcome controller_failure(const Approach::Result & approach, FollowStatus status, bool ok)
 {
   Outcome outcome;
   outcome.status = to_wire(status);
@@ -46,15 +47,17 @@ bool tracking_required(Approach::State state) noexcept
   return state == Approach::State::Inactive || state == Approach::State::Approaching;
 }
 
-std::uint8_t to_wire(Pursuit::Status status) noexcept
+std::uint8_t to_wire(FollowStatus status) noexcept
 {
   switch (status) {
-    case Pursuit::Status::NoPath:
+    case FollowStatus::NoPath:
       return Diagnostic::STATUS_NO_PATH;
-    case Pursuit::Status::Tracking:
+    case FollowStatus::Tracking:
       return Diagnostic::STATUS_TRACKING;
-    case Pursuit::Status::GoalReached:
+    case FollowStatus::GoalReached:
       return Diagnostic::STATUS_GOAL_REACHED;
+    case FollowStatus::SolverFailed:
+      return Diagnostic::STATUS_SOLVER_FAILED;
   }
   return Diagnostic::STATUS_NO_PATH;
 }
@@ -87,18 +90,19 @@ Outcome input_failure(std::uint8_t reason) noexcept
 }
 
 Outcome compose(
-  const Approach::Result & approach, const std::optional<Pursuit::Result> & tracking) noexcept
+  const Approach::Result & approach, const std::optional<eltanin::control::FollowResult> & tracking,
+  const std::optional<Pursuit::Lookahead> & lookahead) noexcept
 {
   if (approach.state == Approach::State::Reached) {
-    return controller_failure(approach, Pursuit::Status::NoPath, true);
+    return controller_failure(approach, FollowStatus::NoPath, true);
   }
   if (approach.state == Approach::State::AlignmentTimeout) {
-    return controller_failure(approach, Pursuit::Status::NoPath, false);
+    return controller_failure(approach, FollowStatus::NoPath, false);
   }
   if (approach.state == Approach::State::Aligning) {
     Outcome outcome;
     outcome.command = approach.command;
-    outcome.status = to_wire(Pursuit::Status::NoPath);
+    outcome.status = to_wire(FollowStatus::NoPath);
     outcome.approach_state = to_wire(approach.state);
     outcome.reason = Diagnostic::REASON_NONE;
     return outcome;
@@ -107,9 +111,9 @@ Outcome compose(
   // Calling with nullopt here is a contract violation; the assert says so and the fallback is safe.
   assert(tracking.has_value());
   if (!tracking.has_value()) {
-    return controller_failure(approach, Pursuit::Status::NoPath, false);
+    return controller_failure(approach, FollowStatus::NoPath, false);
   }
-  if (tracking->status != Pursuit::Status::Tracking) {
+  if (tracking->status != FollowStatus::Tracking) {
     return controller_failure(approach, tracking->status, false);
   }
 
@@ -119,9 +123,12 @@ Outcome compose(
   outcome.status = to_wire(tracking->status);
   outcome.approach_state = to_wire(approach.state);
   outcome.reason = Diagnostic::REASON_NONE;
-  outcome.has_lookahead = true;
-  outcome.lookahead_index = tracking->target_index;
-  outcome.lookahead_point = tracking->lookahead_point;
+  // A follower without a lookahead, such as the MPC, simply publishes no point.
+  outcome.has_lookahead = lookahead.has_value();
+  if (lookahead.has_value()) {
+    outcome.lookahead_index = lookahead->target_index;
+    outcome.lookahead_point = lookahead->point;
+  }
   return outcome;
 }
 

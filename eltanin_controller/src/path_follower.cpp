@@ -319,12 +319,16 @@ PathFollower::CycleOutcome PathFollower::run_cycle(const rclcpp::Time & now)
   const eltanin::Path & path = *reading.snapshot.path;
   const eltanin::control::GoalApproach::Result approach =
     approach_.compute(*robot, path, tick.seconds);
-  std::optional<eltanin::control::PurePursuit::Result> tracking;
+  std::optional<eltanin::control::FollowResult> tracking;
+  std::optional<eltanin::control::PurePursuit::Lookahead> lookahead;
   if (composition::tracking_required(approach.state)) {
-    tracking = pursuit_.compute(*robot, path, tick.seconds);
+    // No measured twist: the follower substitutes the command it returned last cycle.
+    tracking =
+      pursuit_.follow(eltanin::control::FollowerState{*robot, std::nullopt}, path, tick.seconds);
+    lookahead = pursuit_.lookahead();
   }
 
-  cycle.outcome = composition::compose(approach, tracking);
+  cycle.outcome = composition::compose(approach, tracking, lookahead);
   cycle.remaining_arc = approach.remaining_arc;
   cycle.position_error = approach.position_error;
   cycle.yaw_error = approach.yaw_error;

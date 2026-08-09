@@ -54,6 +54,10 @@ rclcpp::QoS control_qos()
 constexpr const char * MAP_FRAME = "test_map";
 constexpr const char * BASE_FRAME = "test_base";
 
+/// Names of this test alone, so a planner test running beside it cannot feed the follower.
+constexpr const char * PATH_TOPIC = "/test_follower_path";
+constexpr const char * TRAJECTORY_TOPIC = "/test_follower_trajectory";
+
 nav_msgs::msg::Path make_path(
   const rclcpp::Time & stamp, const std::string & frame_id = MAP_FRAME, std::size_t poses = 41,
   double goal_yaw = 0.0)
@@ -91,29 +95,28 @@ protected:
   void SetUp() override
   {
     helper_ = std::make_shared<rclcpp::Node>("test_helper");
-    path_publisher_ = helper_->create_publisher<nav_msgs::msg::Path>(
-      "/global_path_planner/global_path", control_qos());
-    trajectory_publisher_ = helper_->create_publisher<eltanin_msgs::msg::Trajectory2D>(
-      "/local_path_planner/local_trajectory", control_qos());
+    path_publisher_ = helper_->create_publisher<nav_msgs::msg::Path>(PATH_TOPIC, control_qos());
+    trajectory_publisher_ =
+      helper_->create_publisher<eltanin_msgs::msg::Trajectory2D>(TRAJECTORY_TOPIC, control_qos());
     broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(helper_);
     command_subscription_ = helper_->create_subscription<geometry_msgs::msg::TwistStamped>(
-      "/path_follower/cmd_vel_raw", control_qos(),
+      "/test_path_follower/cmd_vel_raw", control_qos(),
       [this](geometry_msgs::msg::TwistStamped::ConstSharedPtr msg) {
         const std::lock_guard<std::mutex> lock(mutex_);
         commands_.push_back(*msg);
       });
     diagnostic_subscription_ = helper_->create_subscription<Diagnostic>(
-      "/path_follower/follower_state", control_qos(), [this](Diagnostic::ConstSharedPtr msg) {
+      "/test_path_follower/follower_state", control_qos(), [this](Diagnostic::ConstSharedPtr msg) {
         const std::lock_guard<std::mutex> lock(mutex_);
         diagnostics_.push_back(*msg);
       });
     lookahead_subscription_ = helper_->create_subscription<geometry_msgs::msg::PointStamped>(
-      "/path_follower/lookahead_point", control_qos(),
+      "/test_path_follower/lookahead_point", control_qos(),
       [this](geometry_msgs::msg::PointStamped::ConstSharedPtr msg) {
         const std::lock_guard<std::mutex> lock(mutex_);
         lookaheads_.push_back(*msg);
       });
-    reset_client_ = helper_->create_client<std_srvs::srv::Trigger>("/path_follower/reset");
+    reset_client_ = helper_->create_client<std_srvs::srv::Trigger>("/test_path_follower/reset");
 
     executor_ = std::make_shared<rclcpp::executors::MultiThreadedExecutor>();
     executor_->add_node(helper_);
@@ -141,6 +144,10 @@ protected:
     all.insert(all.end(), parameters.begin(), parameters.end());
     rclcpp::NodeOptions options;
     options.parameter_overrides(all);
+    options.arguments(
+      {"--ros-args", "-r", "__node:=test_path_follower", "-r",
+       std::string("global_path_planner/global_path:=") + PATH_TOPIC, "-r",
+       std::string("local_path_planner/local_trajectory:=") + TRAJECTORY_TOPIC});
     node_ = std::make_shared<PathFollower>(options);
     executor_->add_node(node_);
   }

@@ -7,11 +7,13 @@
 
 std_msgs/Header header
 
-# eltanin::control::PurePursuit::Status in declaration order, which is the wire format from here on:
+# eltanin::control::FollowStatus in declaration order, which is the wire format from here on:
 # reordering the enum means updating the table in eltanin_controller, not just this file.
+# SOLVER_FAILED can only come from a follower that solves something; pure pursuit never returns it.
 uint8 STATUS_NO_PATH=0
 uint8 STATUS_TRACKING=1
 uint8 STATUS_GOAL_REACHED=2
+uint8 STATUS_SOLVER_FAILED=3
 uint8 status
 
 # eltanin::control::GoalApproach::State, same rule.
@@ -36,9 +38,9 @@ uint8 REASON_CONTROLLER=7      # eltanin returned something other than tracking;
 uint8 reason
 
 # False only for the failures the follower cannot recover from on its own, which is the navigator's
-# rule for a stopping trigger: AlignmentTimeout, PurePursuit::NoPath and a PurePursuit::GoalReached
-# that beat GoalApproach to the goal. Every input-side failure leaves this true, because the
-# upstream coming back fixes it.
+# rule for a stopping trigger: AlignmentTimeout, and any follow status other than Tracking while
+# there was still a path to track. Every input-side failure leaves this true, because the upstream
+# coming back fixes it.
 bool ok
 
 string message

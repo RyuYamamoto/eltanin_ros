@@ -30,6 +30,8 @@ namespace
 using Approach = eltanin::control::GoalApproach;
 using Diagnostic = eltanin_msgs::msg::FollowerDiagnostic;
 using Pursuit = eltanin::control::PurePursuit;
+using eltanin::control::FollowResult;
+using eltanin::control::FollowStatus;
 using eltanin_controller::composition::compose;
 using eltanin_controller::composition::input_failure;
 using eltanin_controller::composition::Outcome;
@@ -47,15 +49,19 @@ Approach::Result make_approach(Approach::State state, double linear_vel_limit = 
   return result;
 }
 
-Pursuit::Result make_tracking(Pursuit::Status status, double linear = 0.5, double angular = 0.4)
+FollowResult make_tracking(FollowStatus status, double linear = 0.5, double angular = 0.4)
 {
-  Pursuit::Result result;
+  FollowResult result;
   result.command.linear = Eigen::Vector2d{linear, 0.0};
   result.command.angular = angular;
   result.status = status;
-  result.target_index = 7;
-  result.lookahead_point = Eigen::Vector2d{1.25, -0.5};
   return result;
+}
+
+/// What PurePursuit::lookahead() reports while it is tracking; the MPC has none of this.
+Pursuit::Lookahead make_lookahead()
+{
+  return Pursuit::Lookahead{7, Eigen::Vector2d{1.25, -0.5}};
 }
 
 void expect_zero_command(const Outcome & outcome)
@@ -79,8 +85,9 @@ TEST(TrackingRequiredTest, OnlyTheTwoStatesThatStillDriveNeedPurePursuit)
 TEST(ComposeTest, AligningIgnoresWhateverPurePursuitWouldHaveSaid)
 {
   const Approach::Result approach = make_approach(Approach::State::Aligning);
-  const Outcome without = compose(approach, std::nullopt);
-  const Outcome with = compose(approach, make_tracking(Pursuit::Status::Tracking, 9.0, -9.0));
+  const Outcome without = compose(approach, std::nullopt, std::nullopt);
+  const Outcome with =
+    compose(approach, make_tracking(FollowStatus::Tracking, 9.0, -9.0), make_lookahead());
 
   EXPECT_EQ(without.command.angular, approach.command.angular);
   EXPECT_EQ(with.command.angular, approach.command.angular);
@@ -94,7 +101,8 @@ TEST(ComposeTest, AligningIgnoresWhateverPurePursuitWouldHaveSaid)
 
 TEST(ComposeTest, ReachedIsAZeroCommandAndNotAFailure)
 {
-  const Outcome outcome = compose(make_approach(Approach::State::Reached, 0.0), std::nullopt);
+  const Outcome outcome =
+    compose(make_approach(Approach::State::Reached, 0.0), std::nullopt, std::nullopt);
   expect_zero_command(outcome);
   EXPECT_EQ(outcome.approach_state, Diagnostic::APPROACH_REACHED);
   EXPECT_EQ(outcome.reason, Diagnostic::REASON_CONTROLLER);
@@ -104,7 +112,7 @@ TEST(ComposeTest, ReachedIsAZeroCommandAndNotAFailure)
 TEST(ComposeTest, AlignmentTimeoutIsAZeroCommandAndAFailure)
 {
   const Outcome outcome =
-    compose(make_approach(Approach::State::AlignmentTimeout, 0.0), std::nullopt);
+    compose(make_approach(Approach::State::AlignmentTimeout, 0.0), std::nullopt, std::nullopt);
   expect_zero_command(outcome);
   EXPECT_EQ(outcome.approach_state, Diagnostic::APPROACH_ALIGNMENT_TIMEOUT);
   EXPECT_EQ(outcome.reason, Diagnostic::REASON_CONTROLLER);
@@ -113,8 +121,9 @@ TEST(ComposeTest, AlignmentTimeoutIsAZeroCommandAndAFailure)
 
 TEST(ComposeTest, AnUnlimitedApproachLeavesTheTrackingCommandUntouched)
 {
-  const Pursuit::Result tracking = make_tracking(Pursuit::Status::Tracking);
-  const Outcome outcome = compose(make_approach(Approach::State::Inactive, INFINITE), tracking);
+  const FollowResult tracking = make_tracking(FollowStatus::Tracking);
+  const Outcome outcome =
+    compose(make_approach(Approach::State::Inactive, INFINITE), tracking, make_lookahead());
 
   EXPECT_EQ(outcome.command.linear.x(), tracking.command.linear.x());
   EXPECT_EQ(outcome.command.angular, tracking.command.angular);
@@ -123,14 +132,15 @@ TEST(ComposeTest, AnUnlimitedApproachLeavesTheTrackingCommandUntouched)
   EXPECT_EQ(outcome.reason, Diagnostic::REASON_NONE);
   EXPECT_TRUE(outcome.ok);
   EXPECT_TRUE(outcome.has_lookahead);
-  EXPECT_EQ(outcome.lookahead_index, tracking.target_index);
-  EXPECT_EQ(outcome.lookahead_point, tracking.lookahead_point);
+  EXPECT_EQ(outcome.lookahead_index, make_lookahead().target_index);
+  EXPECT_EQ(outcome.lookahead_point, make_lookahead().point);
 }
 
 TEST(ComposeTest, TheApproachLimitScalesTheWholeCommandAndKeepsTheCurvature)
 {
-  const Pursuit::Result tracking = make_tracking(Pursuit::Status::Tracking, 0.5, 0.4);
-  const Outcome outcome = compose(make_approach(Approach::State::Approaching, 0.25), tracking);
+  const FollowResult tracking = make_tracking(FollowStatus::Tracking, 0.5, 0.4);
+  const Outcome outcome =
+    compose(make_approach(Approach::State::Approaching, 0.25), tracking, make_lookahead());
 
   EXPECT_DOUBLE_EQ(outcome.command.linear.x(), 0.25);
   // std::min on linear.x alone would leave 0.4 here, and the curvature would double.
@@ -144,7 +154,8 @@ TEST(ComposeTest, TheApproachLimitScalesTheWholeCommandAndKeepsTheCurvature)
 TEST(ComposeTest, GoalReachedBeforeTheApproachAcceptedItIsAFailure)
 {
   const Outcome outcome = compose(
-    make_approach(Approach::State::Approaching, 0.4), make_tracking(Pursuit::Status::GoalReached));
+    make_approach(Approach::State::Approaching, 0.4), make_tracking(FollowStatus::GoalReached),
+    std::nullopt);
   expect_zero_command(outcome);
   EXPECT_EQ(outcome.status, Diagnostic::STATUS_GOAL_REACHED);
   EXPECT_EQ(outcome.reason, Diagnostic::REASON_CONTROLLER);
@@ -153,8 +164,8 @@ TEST(ComposeTest, GoalReachedBeforeTheApproachAcceptedItIsAFailure)
 
 TEST(ComposeTest, NoPathIsAFailureEvenThoughTheNodeFiltersEmptyPathsFirst)
 {
-  const Outcome outcome =
-    compose(make_approach(Approach::State::Inactive), make_tracking(Pursuit::Status::NoPath));
+  const Outcome outcome = compose(
+    make_approach(Approach::State::Inactive), make_tracking(FollowStatus::NoPath), std::nullopt);
   expect_zero_command(outcome);
   EXPECT_EQ(outcome.status, Diagnostic::STATUS_NO_PATH);
   EXPECT_EQ(outcome.reason, Diagnostic::REASON_CONTROLLER);
@@ -164,12 +175,34 @@ TEST(ComposeTest, NoPathIsAFailureEvenThoughTheNodeFiltersEmptyPathsFirst)
 #ifdef NDEBUG
 TEST(ComposeTest, AMissingTrackingResultDegradesToTheSafeSide)
 {
-  const Outcome outcome = compose(make_approach(Approach::State::Inactive), std::nullopt);
+  const Outcome outcome =
+    compose(make_approach(Approach::State::Inactive), std::nullopt, std::nullopt);
   expect_zero_command(outcome);
   EXPECT_EQ(outcome.reason, Diagnostic::REASON_CONTROLLER);
   EXPECT_FALSE(outcome.ok);
 }
 #endif
+
+TEST(ComposeTest, ASolverFailureIsAFailureTheFollowerCannotRecoverFrom)
+{
+  const Outcome outcome = compose(
+    make_approach(Approach::State::Inactive), make_tracking(FollowStatus::SolverFailed),
+    std::nullopt);
+  expect_zero_command(outcome);
+  EXPECT_EQ(outcome.status, Diagnostic::STATUS_SOLVER_FAILED);
+  EXPECT_EQ(outcome.reason, Diagnostic::REASON_CONTROLLER);
+  EXPECT_FALSE(outcome.ok);
+}
+
+TEST(ComposeTest, AFollowerWithoutALookaheadTracksWithoutPublishingAPoint)
+{
+  const Outcome outcome = compose(
+    make_approach(Approach::State::Inactive, INFINITE), make_tracking(FollowStatus::Tracking),
+    std::nullopt);
+  EXPECT_EQ(outcome.status, Diagnostic::STATUS_TRACKING);
+  EXPECT_TRUE(outcome.ok);
+  EXPECT_FALSE(outcome.has_lookahead);
+}
 
 TEST(InputFailureTest, EveryInputSideReasonIsAZeroCommandThatIsStillOk)
 {
@@ -187,14 +220,16 @@ TEST(InputFailureTest, EveryInputSideReasonIsAZeroCommandThatIsStillOk)
   }
 }
 
-TEST(WireConstantsTest, ThePursuitStatusFollowsItsDeclarationOrder)
+TEST(WireConstantsTest, TheFollowStatusFollowsItsDeclarationOrder)
 {
-  EXPECT_EQ(to_wire(Pursuit::Status::NoPath), Diagnostic::STATUS_NO_PATH);
-  EXPECT_EQ(to_wire(Pursuit::Status::Tracking), Diagnostic::STATUS_TRACKING);
-  EXPECT_EQ(to_wire(Pursuit::Status::GoalReached), Diagnostic::STATUS_GOAL_REACHED);
+  EXPECT_EQ(to_wire(FollowStatus::NoPath), Diagnostic::STATUS_NO_PATH);
+  EXPECT_EQ(to_wire(FollowStatus::Tracking), Diagnostic::STATUS_TRACKING);
+  EXPECT_EQ(to_wire(FollowStatus::GoalReached), Diagnostic::STATUS_GOAL_REACHED);
+  EXPECT_EQ(to_wire(FollowStatus::SolverFailed), Diagnostic::STATUS_SOLVER_FAILED);
   EXPECT_EQ(Diagnostic::STATUS_NO_PATH, 0);
   EXPECT_EQ(Diagnostic::STATUS_TRACKING, 1);
   EXPECT_EQ(Diagnostic::STATUS_GOAL_REACHED, 2);
+  EXPECT_EQ(Diagnostic::STATUS_SOLVER_FAILED, 3);
 }
 
 TEST(WireConstantsTest, TheApproachStateFollowsItsDeclarationOrder)
