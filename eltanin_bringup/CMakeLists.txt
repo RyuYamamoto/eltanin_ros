@@ -4,7 +4,9 @@ project(eltanin_bringup NONE)
 
 find_package(ament_cmake REQUIRED)
 
-install(DIRECTORY config launch rviz DESTINATION share/${PROJECT_NAME})
+# No config/: the machine profiles ship from eltanin_ros_common and the node parameters from the
+# packages that declare them. This package composes those files, it does not carry any.
+install(DIRECTORY launch rviz DESTINATION share/${PROJECT_NAME})
 
 # RENAME so that the launch file names an executable, not a file with an extension.
 install(PROGRAMS scripts/goal_pose_relay.py
