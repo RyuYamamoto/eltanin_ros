@@ -40,7 +40,6 @@ constexpr const char * KEY_FREE_THRESHOLD = "free_threshold";
 constexpr const char * KEY_PUBLISH_VISUALIZATION = "publish_visualization";
 
 /// Visualization is on by default, so the default configuration is one RViz can already read.
-constexpr bool DEFAULT_PUBLISH_VISUALIZATION = true;
 
 std::string reject_parameter(const char * key, const std::string & violation)
 {
@@ -62,23 +61,27 @@ std::string flatten(std::string text)
   throw std::runtime_error(line);
 }
 
+/// Declared without a fallback: a key missing from the configuration stops the node naming it,
+/// rather than running on a value nobody chose.
 template <class T>
-T require_parameter(rclcpp::Node & node, const char * key, const T & fallback)
+T require_parameter(rclcpp::Node & node, const char * key)
 {
   try {
     if (!node.has_parameter(key)) {
-      node.declare_parameter(key, fallback);
+      node.declare_parameter<T>(key);
     }
     return node.get_parameter(key).get_value<T>();
+  } catch (const rclcpp::exceptions::ParameterUninitializedException &) {
+    refuse_to_start(node, reject_parameter(key, "is not set; every key has to come from a config"));
   } catch (const std::runtime_error & error) {
     refuse_to_start(node, reject_parameter(key, flatten(error.what())));
   }
 }
 
 /// Only the mechanical int range is checked here; 0 <= free < occupied <= 100 belongs to D-20.
-int require_threshold(rclcpp::Node & node, const char * key, int fallback)
+int require_threshold(rclcpp::Node & node, const char * key)
 {
-  const auto value = require_parameter<std::int64_t>(node, key, fallback);
+  const auto value = require_parameter<std::int64_t>(node, key);
   if (value < std::numeric_limits<int>::min() || value > std::numeric_limits<int>::max()) {
     refuse_to_start(node, reject_parameter(key, "is " + std::to_string(value) + ", not an int"));
   }
@@ -87,11 +90,9 @@ int require_threshold(rclcpp::Node & node, const char * key, int fallback)
 
 eltanin_ros_common::OccupancyThresholds require_thresholds(rclcpp::Node & node)
 {
-  const eltanin_ros_common::OccupancyThresholds defaults;
   eltanin_ros_common::OccupancyThresholds thresholds;
-  thresholds.occupied_threshold =
-    require_threshold(node, KEY_OCCUPIED_THRESHOLD, defaults.occupied_threshold);
-  thresholds.free_threshold = require_threshold(node, KEY_FREE_THRESHOLD, defaults.free_threshold);
+  thresholds.occupied_threshold = require_threshold(node, KEY_OCCUPIED_THRESHOLD);
+  thresholds.free_threshold = require_threshold(node, KEY_FREE_THRESHOLD);
 
   const eltanin_ros_common::ConversionStatus status = eltanin_ros_common::validate(thresholds);
   if (!status.ok()) {
@@ -148,9 +149,8 @@ GlobalCostmap::GlobalCostmap(const rclcpp::NodeOptions & options)
 : rclcpp::Node("global_costmap", options),
   profile_(require_robot_profile(*this)),
   thresholds_(require_thresholds(*this)),
-  inflate_unknown_(require_parameter(*this, KEY_INFLATE_UNKNOWN, false)),
-  publish_visualization_(
-    require_parameter(*this, KEY_PUBLISH_VISUALIZATION, DEFAULT_PUBLISH_VISUALIZATION))
+  inflate_unknown_(require_parameter<bool>(*this, KEY_INFLATE_UNKNOWN)),
+  publish_visualization_(require_parameter<bool>(*this, KEY_PUBLISH_VISUALIZATION))
 {
   map_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
   observation_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);

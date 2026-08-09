@@ -1,0 +1,10 @@
+# Every parameter global_costmap declares. The machine values (robot.* and frames.*) are not here:
+# they come from eltanin_ros_common/config/robot/<profile>.yaml through the /** wildcard.
+global_costmap:
+  ros__parameters:
+    # A cell /map never saw stays unknown; inflating it would invent obstacles.
+    inflate_unknown: false
+    occupied_threshold: 65
+    free_threshold: 25
+    # /global_costmap/global_costmap_visual for RViz, which cannot draw eltanin_msgs/Costmap.
+    publish_visualization: true

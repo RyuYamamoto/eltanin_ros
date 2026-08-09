@@ -50,21 +50,23 @@ rclcpp_components_register_node(${PROJECT_NAME}
 install(DIRECTORY include/ DESTINATION include/${PROJECT_NAME})
 # Required: the generated executable dlopens lib/libeltanin_costmap.so to find the component.
 install(TARGETS ${PROJECT_NAME} LIBRARY DESTINATION lib)
+install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  find_package(ament_index_cpp REQUIRED)
   foreach(test_name
       test_global_costmap_state
       test_observation_store
       test_update_region)
     ament_add_gtest(${test_name} test/${test_name}.cpp)
-    target_link_libraries(${test_name} ${PROJECT_NAME})
+    target_link_libraries(${test_name} ${PROJECT_NAME} ament_index_cpp::ament_index_cpp)
     target_compile_options(${test_name} PRIVATE ${warning_options})
   endforeach()
 
   # The only test in this package that calls rclcpp::init; the pure parts above do not need it.
   ament_add_gtest(test_global_costmap test/test_global_costmap.cpp TIMEOUT 60)
-  target_link_libraries(test_global_costmap ${PROJECT_NAME})
+  target_link_libraries(test_global_costmap ${PROJECT_NAME} ament_index_cpp::ament_index_cpp)
   target_compile_options(test_global_costmap PRIVATE ${warning_options})
 endif()
 

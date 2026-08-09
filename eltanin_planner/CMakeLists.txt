@@ -58,14 +58,16 @@ rclcpp_components_register_node(${PROJECT_NAME}
 install(DIRECTORY include/ DESTINATION include/${PROJECT_NAME})
 # Required: the generated executable dlopens lib/libeltanin_planner.so to find the component.
 install(TARGETS ${PROJECT_NAME} LIBRARY DESTINATION lib)
+install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  find_package(ament_index_cpp REQUIRED)
   foreach(test_name
       test_goal_validation
       test_planner_parameters)
     ament_add_gtest(${test_name} test/${test_name}.cpp)
-    target_link_libraries(${test_name} ${PROJECT_NAME})
+    target_link_libraries(${test_name} ${PROJECT_NAME} ament_index_cpp::ament_index_cpp)
     target_include_directories(${test_name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_options(${test_name} PRIVATE ${warning_options})
   endforeach()
@@ -73,7 +75,7 @@ if(BUILD_TESTING)
   # The only test in this package that calls rclcpp::init; the pure parts above do not need it.
   # 120 s rather than 60: an action round trip in a Debug CI build is slower than a service call.
   ament_add_gtest(test_global_path_planner test/test_global_path_planner.cpp TIMEOUT 120)
-  target_link_libraries(test_global_path_planner ${PROJECT_NAME})
+  target_link_libraries(test_global_path_planner ${PROJECT_NAME} ament_index_cpp::ament_index_cpp)
   target_include_directories(test_global_path_planner PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_compile_options(test_global_path_planner PRIVATE ${warning_options})
 endif()

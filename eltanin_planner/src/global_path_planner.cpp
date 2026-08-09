@@ -54,23 +54,28 @@ namespace
   throw std::runtime_error(line);
 }
 
+/// Declared without a fallback: a key missing from the configuration stops the node naming it,
+/// rather than running on a value nobody chose.
 template <class T>
-T require_parameter(rclcpp::Node & node, const char * key, const T & fallback)
+T require_parameter(rclcpp::Node & node, const char * key)
 {
   try {
     if (!node.has_parameter(key)) {
-      node.declare_parameter(key, fallback);
+      node.declare_parameter<T>(key);
     }
     return node.get_parameter(key).get_value<T>();
+  } catch (const rclcpp::exceptions::ParameterUninitializedException &) {
+    refuse_to_start(
+      node, diagnostic::rejected(key, "is not set; every key has to come from a config"));
   } catch (const std::runtime_error & error) {
     refuse_to_start(node, diagnostic::rejected(key, diagnostic::flatten(error.what())));
   }
 }
 
 /// declare_parameter hands back an int64; only the mechanical range is checked here.
-int require_int(rclcpp::Node & node, const char * key, int fallback)
+int require_int(rclcpp::Node & node, const char * key)
 {
-  const auto value = require_parameter<std::int64_t>(node, key, fallback);
+  const auto value = require_parameter<std::int64_t>(node, key);
   if (value < std::numeric_limits<int>::min() || value > std::numeric_limits<int>::max()) {
     refuse_to_start(
       node, diagnostic::rejected(key, "is " + std::to_string(value) + ", not an int"));
@@ -79,9 +84,9 @@ int require_int(rclcpp::Node & node, const char * key, int fallback)
 }
 
 /// max_expansions is a size_t, so the sign has to be refused before the cast, not after it.
-int require_non_negative_int(rclcpp::Node & node, const char * key, int fallback)
+int require_non_negative_int(rclcpp::Node & node, const char * key)
 {
-  const int value = require_int(node, key, fallback);
+  const int value = require_int(node, key);
   if (value < 0) {
     refuse_to_start(
       node,
@@ -90,9 +95,9 @@ int require_non_negative_int(rclcpp::Node & node, const char * key, int fallback
   return value;
 }
 
-PlannerType require_planner_type(rclcpp::Node & node, PlannerType fallback)
+PlannerType require_planner_type(rclcpp::Node & node)
 {
-  const auto name = require_parameter<std::string>(node, KEY_PLANNER_TYPE, name_of(fallback));
+  const auto name = require_parameter<std::string>(node, KEY_PLANNER_TYPE);
   const std::optional<PlannerType> type = to_planner_type(name);
   if (!type.has_value()) {
     refuse_to_start(
@@ -106,83 +111,65 @@ PlannerType require_planner_type(rclcpp::Node & node, PlannerType fallback)
 /// Read once at construction and never again; the defaults come from eltanin, not from literals.
 PlannerParameters require_parameters(rclcpp::Node & node, const eltanin::Polygon2D & footprint)
 {
-  const PlannerParameters defaults;
   PlannerParameters parameters;
-  parameters.planner_type = require_planner_type(node, defaults.planner_type);
+  parameters.planner_type = require_planner_type(node);
   // One key for a radius both searches take, so the two cannot be given different values.
-  parameters.astar.common.start_search_radius_cells = require_int(
-    node, KEY_START_SEARCH_RADIUS_CELLS, defaults.astar.common.start_search_radius_cells);
+  parameters.astar.common.start_search_radius_cells =
+    require_int(node, KEY_START_SEARCH_RADIUS_CELLS);
   parameters.hybrid.common.start_search_radius_cells =
     parameters.astar.common.start_search_radius_cells;
-  parameters.hybrid.heading_bins =
-    require_int(node, KEY_HEADING_BINS, defaults.hybrid.heading_bins);
-  parameters.hybrid.motion_step =
-    require_parameter(node, KEY_MOTION_STEP, defaults.hybrid.motion_step);
+  parameters.hybrid.heading_bins = require_int(node, KEY_HEADING_BINS);
+  parameters.hybrid.motion_step = require_parameter<double>(node, KEY_MOTION_STEP);
   parameters.hybrid.collision_check_step =
-    require_parameter(node, KEY_COLLISION_CHECK_STEP, defaults.hybrid.collision_check_step);
-  parameters.hybrid.dubins_expansion_distance = require_parameter(
-    node, KEY_DUBINS_EXPANSION_DISTANCE, defaults.hybrid.dubins_expansion_distance);
-  parameters.hybrid.steering_penalty =
-    require_parameter(node, KEY_STEERING_PENALTY, defaults.hybrid.steering_penalty);
+    require_parameter<double>(node, KEY_COLLISION_CHECK_STEP);
+  parameters.hybrid.dubins_expansion_distance =
+    require_parameter<double>(node, KEY_DUBINS_EXPANSION_DISTANCE);
+  parameters.hybrid.steering_penalty = require_parameter<double>(node, KEY_STEERING_PENALTY);
   parameters.hybrid.steering_change_penalty =
-    require_parameter(node, KEY_STEERING_CHANGE_PENALTY, defaults.hybrid.steering_change_penalty);
-  parameters.hybrid.max_expansions = static_cast<std::size_t>(require_non_negative_int(
-    node, KEY_MAX_EXPANSIONS, static_cast<int>(defaults.hybrid.max_expansions)));
+    require_parameter<double>(node, KEY_STEERING_CHANGE_PENALTY);
+  parameters.hybrid.max_expansions =
+    static_cast<std::size_t>(require_non_negative_int(node, KEY_MAX_EXPANSIONS));
   parameters.hybrid.analytic_expansion_ratio =
-    require_parameter(node, KEY_ANALYTIC_EXPANSION_RATIO, defaults.hybrid.analytic_expansion_ratio);
+    require_parameter<double>(node, KEY_ANALYTIC_EXPANSION_RATIO);
   parameters.hybrid.clearance.penalty =
-    require_parameter(node, KEY_HYBRID_CLEARANCE_PENALTY, defaults.hybrid.clearance.penalty);
+    require_parameter<double>(node, KEY_HYBRID_CLEARANCE_PENALTY);
   parameters.hybrid.clearance.distance =
-    require_parameter(node, KEY_HYBRID_CLEARANCE_DISTANCE, defaults.hybrid.clearance.distance);
-  parameters.hybrid.emit_goal_rotation =
-    require_parameter(node, KEY_EMIT_GOAL_ROTATION, defaults.hybrid.emit_goal_rotation);
+    require_parameter<double>(node, KEY_HYBRID_CLEARANCE_DISTANCE);
+  parameters.hybrid.emit_goal_rotation = require_parameter<bool>(node, KEY_EMIT_GOAL_ROTATION);
   parameters.hybrid.circumscribed_penalty =
-    require_parameter(node, KEY_CIRCUMSCRIBED_PENALTY, defaults.hybrid.circumscribed_penalty);
-  parameters.hybrid.motion_model.reverse =
-    require_parameter(node, KEY_ALLOW_REVERSE, defaults.hybrid.motion_model.reverse);
+    require_parameter<double>(node, KEY_CIRCUMSCRIBED_PENALTY);
+  parameters.hybrid.motion_model.reverse = require_parameter<bool>(node, KEY_ALLOW_REVERSE);
   parameters.hybrid.motion_model.turn_in_place =
-    require_parameter(node, KEY_ALLOW_TURN_IN_PLACE, defaults.hybrid.motion_model.turn_in_place);
+    require_parameter<bool>(node, KEY_ALLOW_TURN_IN_PLACE);
   // Set after the model, which would otherwise carry its own default radius over the parameter.
-  parameters.hybrid.motion_model.minimum_turning_radius = require_parameter(
-    node, KEY_MINIMUM_TURNING_RADIUS, defaults.hybrid.motion_model.minimum_turning_radius);
-  parameters.hybrid.heuristic_weight =
-    require_parameter(node, KEY_HEURISTIC_WEIGHT, defaults.hybrid.heuristic_weight);
-  parameters.hybrid.reverse_penalty =
-    require_parameter(node, KEY_REVERSE_PENALTY, defaults.hybrid.reverse_penalty);
+  parameters.hybrid.motion_model.minimum_turning_radius =
+    require_parameter<double>(node, KEY_MINIMUM_TURNING_RADIUS);
+  parameters.hybrid.heuristic_weight = require_parameter<double>(node, KEY_HEURISTIC_WEIGHT);
+  parameters.hybrid.reverse_penalty = require_parameter<double>(node, KEY_REVERSE_PENALTY);
   parameters.hybrid.direction_change_penalty =
-    require_parameter(node, KEY_DIRECTION_CHANGE_PENALTY, defaults.hybrid.direction_change_penalty);
-  parameters.hybrid_max_states = static_cast<std::size_t>(
-    require_non_negative_int(node, KEY_MAX_STATES, static_cast<int>(defaults.hybrid_max_states)));
-  parameters.hybrid_corridor_margin_cells = require_non_negative_int(
-    node, KEY_CORRIDOR_MARGIN_CELLS, defaults.hybrid_corridor_margin_cells);
-  parameters.smoother.weight_data =
-    require_parameter(node, KEY_WEIGHT_DATA, defaults.smoother.weight_data);
-  parameters.smoother.weight_smooth =
-    require_parameter(node, KEY_WEIGHT_SMOOTH, defaults.smoother.weight_smooth);
-  parameters.smoother.tolerance =
-    require_parameter(node, KEY_SMOOTHER_TOLERANCE, defaults.smoother.tolerance);
-  parameters.smoother.max_iterations =
-    require_int(node, KEY_SMOOTHER_MAX_ITERATIONS, defaults.smoother.max_iterations);
-  parameters.publish_raw_path =
-    require_parameter(node, KEY_PUBLISH_RAW_PATH, defaults.publish_raw_path);
+    require_parameter<double>(node, KEY_DIRECTION_CHANGE_PENALTY);
+  parameters.hybrid_max_states =
+    static_cast<std::size_t>(require_non_negative_int(node, KEY_MAX_STATES));
+  parameters.hybrid_corridor_margin_cells =
+    require_non_negative_int(node, KEY_CORRIDOR_MARGIN_CELLS);
+  parameters.smoother.weight_data = require_parameter<double>(node, KEY_WEIGHT_DATA);
+  parameters.smoother.weight_smooth = require_parameter<double>(node, KEY_WEIGHT_SMOOTH);
+  parameters.smoother.tolerance = require_parameter<double>(node, KEY_SMOOTHER_TOLERANCE);
+  parameters.smoother.max_iterations = require_int(node, KEY_SMOOTHER_MAX_ITERATIONS);
+  parameters.publish_raw_path = require_parameter<bool>(node, KEY_PUBLISH_RAW_PATH);
   // Only publish_raw_path needs the two-step form; plan_astar() reuses the grid it already built.
   if (parameters.publish_raw_path) {
     parameters.astar.smoother.reset();
   } else {
     parameters.astar.smoother = parameters.smoother;
   }
-  parameters.astar.clearance.penalty =
-    require_parameter(node, KEY_ASTAR_CLEARANCE_PENALTY, defaults.astar.clearance.penalty);
+  parameters.astar.clearance.penalty = require_parameter<double>(node, KEY_ASTAR_CLEARANCE_PENALTY);
   parameters.astar.clearance.distance =
-    require_parameter(node, KEY_ASTAR_CLEARANCE_DISTANCE, defaults.astar.clearance.distance);
-  parameters.unknown_is_free =
-    require_parameter(node, KEY_UNKNOWN_IS_FREE, defaults.unknown_is_free);
-  parameters.tf_lookup_timeout =
-    require_parameter(node, KEY_TF_LOOKUP_TIMEOUT, defaults.tf_lookup_timeout);
-  parameters.publish_footprint_path =
-    require_parameter(node, KEY_PUBLISH_FOOTPRINT_PATH, defaults.publish_footprint_path);
-  parameters.footprint_marker_stride =
-    require_int(node, KEY_FOOTPRINT_MARKER_STRIDE, defaults.footprint_marker_stride);
+    require_parameter<double>(node, KEY_ASTAR_CLEARANCE_DISTANCE);
+  parameters.unknown_is_free = require_parameter<bool>(node, KEY_UNKNOWN_IS_FREE);
+  parameters.tf_lookup_timeout = require_parameter<double>(node, KEY_TF_LOOKUP_TIMEOUT);
+  parameters.publish_footprint_path = require_parameter<bool>(node, KEY_PUBLISH_FOOTPRINT_PATH);
+  parameters.footprint_marker_stride = require_int(node, KEY_FOOTPRINT_MARKER_STRIDE);
 
   // With the outline the search may use the circumscribed band at headings the body clears.
   parameters.hybrid.common.footprint = footprint;

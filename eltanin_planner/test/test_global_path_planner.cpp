@@ -14,8 +14,10 @@
 
 #include "eltanin_planner/global_path_planner.hpp"
 
+#include <ament_index_cpp/get_package_share_directory.hpp>
 #include <eltanin/map/cost_values.hpp>
 #include <eltanin_ros_common/geometry_conversion.hpp>
+#include <rclcpp/parameter_map.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 
@@ -130,6 +132,24 @@ Action::Goal make_goal(double goal_yaw = 0.0)
   return ::testing::AssertionSuccess();
 }
 
+/// The shipped configuration, so a key missing from it fails here instead of on the robot.
+std::vector<rclcpp::Parameter> shipped_configuration()
+{
+  std::vector<rclcpp::Parameter> parameters;
+  const std::vector<std::string> files{
+    ament_index_cpp::get_package_share_directory("eltanin_ros_common") +
+      "/config/robot/kachaka.yaml",
+    ament_index_cpp::get_package_share_directory("eltanin_planner") +
+      "/config/global_path_planner.param.yaml"};
+  for (const std::string & file : files) {
+    for (const auto & [node_name, values] : rclcpp::parameter_map_from_yaml_file(file)) {
+      (void)node_name;
+      parameters.insert(parameters.end(), values.begin(), values.end());
+    }
+  }
+  return parameters;
+}
+
 /// Both nodes share one MultiThreadedExecutor, the executor the generated entry point uses.
 class GlobalPathPlannerFixture : public ::testing::Test
 {
@@ -172,8 +192,10 @@ protected:
   /// Starts the node under test; a construction failure is left to the caller to observe.
   void start(const std::vector<rclcpp::Parameter> & parameters = {})
   {
+    std::vector<rclcpp::Parameter> merged = shipped_configuration();
+    merged.insert(merged.end(), parameters.begin(), parameters.end());
     rclcpp::NodeOptions options;
-    options.parameter_overrides(parameters);
+    options.parameter_overrides(merged);
     node_ = std::make_shared<GlobalPathPlanner>(options);
     executor_->add_node(node_);
     client_ =
@@ -654,7 +676,7 @@ TEST_F(GlobalPathPlannerFixture, HybridAStarPlansAndIsNamedInTheResult)
 
 TEST_F(GlobalPathPlannerFixture, NoFootprintPublisherExistsUnlessItIsAskedFor)
 {
-  start();
+  start({rclcpp::Parameter("publish_footprint_path", false)});
   ASSERT_TRUE(publish_costmap(make_costmap_msg(1)));
   ASSERT_EQ(plan(make_goal())->outcome, NavigationState::OUTCOME_REACHED);
   EXPECT_EQ(helper_->count_publishers("/global_path_planner/footprint_path"), 0u);

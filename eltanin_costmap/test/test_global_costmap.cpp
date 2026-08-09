@@ -14,7 +14,9 @@
 
 #include "eltanin_costmap/global_costmap.hpp"
 
+#include <ament_index_cpp/get_package_share_directory.hpp>
 #include <eltanin/map/cost_values.hpp>
+#include <rclcpp/parameter_map.hpp>
 #include <rclcpp/rclcpp.hpp>
 
 #include <gtest/gtest.h>
@@ -57,6 +59,24 @@ nav_msgs::msg::OccupancyGrid make_grid(const std::string & frame_id = "map")
   return msg;
 }
 
+/// The shipped configuration, so a key missing from it fails here instead of on the robot.
+std::vector<rclcpp::Parameter> shipped_configuration()
+{
+  std::vector<rclcpp::Parameter> parameters;
+  const std::vector<std::string> files{
+    ament_index_cpp::get_package_share_directory("eltanin_ros_common") +
+      "/config/robot/kachaka.yaml",
+    ament_index_cpp::get_package_share_directory("eltanin_costmap") +
+      "/config/global_costmap.param.yaml"};
+  for (const std::string & file : files) {
+    for (const auto & [node_name, values] : rclcpp::parameter_map_from_yaml_file(file)) {
+      (void)node_name;
+      parameters.insert(parameters.end(), values.begin(), values.end());
+    }
+  }
+  return parameters;
+}
+
 /// Both nodes share one MultiThreadedExecutor, the executor the generated entry point uses.
 class GlobalCostmapFixture : public ::testing::Test
 {
@@ -87,8 +107,10 @@ protected:
   /// Starts the node under test; a construction failure is left to the caller to observe.
   void start(const std::vector<rclcpp::Parameter> & parameters = {})
   {
+    std::vector<rclcpp::Parameter> merged = shipped_configuration();
+    merged.insert(merged.end(), parameters.begin(), parameters.end());
     rclcpp::NodeOptions options;
-    options.parameter_overrides(parameters);
+    options.parameter_overrides(merged);
     node_ = std::make_shared<GlobalCostmap>(options);
     executor_->add_node(node_);
   }
@@ -140,7 +162,7 @@ protected:
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr map_publisher_;
 };
 
-TEST_F(GlobalCostmapFixture, StartsWithNoParametersAtAllAndSurvivesWithoutAMap)
+TEST_F(GlobalCostmapFixture, StartsFromTheShippedConfigurationAndSurvivesWithoutAMap)
 {
   ASSERT_NO_THROW(start());
   EXPECT_TRUE(rclcpp::ok());
