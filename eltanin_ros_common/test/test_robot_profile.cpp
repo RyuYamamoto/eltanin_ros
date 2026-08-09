@@ -22,6 +22,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -35,10 +36,26 @@ namespace
 
 const double NOT_A_NUMBER = std::numeric_limits<double>::quiet_NaN();
 
-/// The kachaka footprint of design section 7, which is also the code default (A-42).
+/// The kachaka footprint of design section 7; the shipped profile carries the same numbers.
 std::vector<double> kachaka_footprint()
 {
   return {-0.150, -0.120, 0.237, -0.120, 0.237, 0.120, -0.150, 0.120};
+}
+
+/// declare_robot_profile() has no fallbacks, so every test starts from a complete profile.
+std::vector<rclcpp::Parameter> complete_profile()
+{
+  return {
+    rclcpp::Parameter("robot.footprint", kachaka_footprint()),
+    rclcpp::Parameter("robot.inflation_radius", 0.55),
+    rclcpp::Parameter("robot.cost_scaling_factor", 10.0),
+    rclcpp::Parameter("robot.max_linear_vel", 0.30),
+    rclcpp::Parameter("robot.max_angular_vel", 1.57),
+    rclcpp::Parameter("robot.max_accel", 0.5),
+    rclcpp::Parameter("robot.max_decel", 0.5),
+    rclcpp::Parameter("frames.map", std::string("map")),
+    rclcpp::Parameter("frames.odom", std::string("odom")),
+    rclcpp::Parameter("frames.base", std::string("base_footprint"))};
 }
 
 /// The only test file in this package that constructs a node, and so the only one calling init.
@@ -60,11 +77,22 @@ public:
   }
 
 protected:
-  /// Overrides stand in for the /** wildcard: only the key names have to match (A-26).
+  /// Merged onto a complete profile, so a test changes one key rather than restating ten (A-26).
   std::shared_ptr<rclcpp::Node> make_node(const std::vector<rclcpp::Parameter> & overrides)
   {
+    std::vector<rclcpp::Parameter> merged = complete_profile();
+    for (const rclcpp::Parameter & wanted : overrides) {
+      const auto at = std::find_if(
+        merged.begin(), merged.end(),
+        [&](const rclcpp::Parameter & held) { return held.get_name() == wanted.get_name(); });
+      if (at == merged.end()) {
+        merged.push_back(wanted);
+      } else {
+        *at = wanted;
+      }
+    }
     rclcpp::NodeOptions options;
-    options.parameter_overrides(overrides);
+    options.parameter_overrides(merged);
     ++nodes_made_;
     return std::make_shared<rclcpp::Node>(
       "test_robot_profile_" + std::to_string(nodes_made_), options);
@@ -87,7 +115,7 @@ private:
   int nodes_made_{0};
 };
 
-TEST_F(RobotProfileTest, DefaultsAloneGiveAProfile)
+TEST_F(RobotProfileTest, ACompleteProfileIsAccepted)
 {
   const auto node = make_node();
 
@@ -96,7 +124,7 @@ TEST_F(RobotProfileTest, DefaultsAloneGiveAProfile)
   EXPECT_TRUE(result.ok()) << result.error();
 }
 
-TEST_F(RobotProfileTest, DefaultsAreTheKachakaFootprint)
+TEST_F(RobotProfileTest, TheMachineValuesAreReadBackAsGiven)
 {
   const auto node = make_node();
 
@@ -115,7 +143,7 @@ TEST_F(RobotProfileTest, DefaultsAreTheKachakaFootprint)
   EXPECT_NEAR(profile.limits().max_decel, 0.5, 1e-9);
 }
 
-TEST_F(RobotProfileTest, DefaultFramesAreMapOdomBaseFootprint)
+TEST_F(RobotProfileTest, TheFrameIdsAreReadBackAsGiven)
 {
   const auto node = make_node();
 
@@ -125,6 +153,28 @@ TEST_F(RobotProfileTest, DefaultFramesAreMapOdomBaseFootprint)
   EXPECT_EQ(result.value().frames().map, "map");
   EXPECT_EQ(result.value().frames().odom, "odom");
   EXPECT_EQ(result.value().frames().base, "base_footprint");
+}
+
+TEST_F(RobotProfileTest, EveryMissingKeyIsRefusedByName)
+{
+  for (const rclcpp::Parameter & absent : complete_profile()) {
+    std::vector<rclcpp::Parameter> incomplete;
+    for (const rclcpp::Parameter & held : complete_profile()) {
+      if (held.get_name() != absent.get_name()) {
+        incomplete.push_back(held);
+      }
+    }
+    rclcpp::NodeOptions options;
+    options.parameter_overrides(incomplete);
+    const auto node = std::make_shared<rclcpp::Node>("test_missing_key", options);
+
+    const ConversionResult<RobotProfile> result = declare_robot_profile(*node);
+
+    ASSERT_FALSE(result.ok()) << absent.get_name() << " was accepted while unset";
+    EXPECT_TRUE(contains(result.error(), absent.get_name()));
+    EXPECT_TRUE(is_one_line(result.error()));
+    EXPECT_TRUE(names_the_package_once(result.error()));
+  }
 }
 
 TEST_F(RobotProfileTest, OverridesAreReadUnderTheDeclaredKeys)

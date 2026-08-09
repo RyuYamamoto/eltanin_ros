@@ -68,6 +68,9 @@ target_include_directories(${PROJECT_NAME}_runtime PRIVATE "${CMAKE_CURRENT_SOUR
 target_compile_options(${PROJECT_NAME}_runtime PRIVATE ${warning_options})
 
 install(DIRECTORY include/ DESTINATION include/${PROJECT_NAME})
+# The machine profiles live here rather than in eltanin_bringup: declare_robot_profile() has no
+# fallbacks, so every node package's tests need a profile, and they all depend on this package.
+install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
 # One export set for both, so a downstream package gets them from one find_package (A-3).
 install(TARGETS ${PROJECT_NAME} ${PROJECT_NAME}_runtime
   EXPORT export_${PROJECT_NAME}
@@ -91,6 +94,9 @@ ament_export_dependencies(
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  find_package(ament_cmake_pytest REQUIRED)
+  # The machine profiles ship from this package, so the fence over them lives here too.
+  ament_add_pytest_test(test_robot_profile_config test/test_robot_profile_config.py)
   # No node is started anywhere in these tests: the whole target is reachable without rclcpp::init.
   foreach(test_name
       test_conversion_result

@@ -56,21 +56,6 @@ constexpr const char * KEY_FRAME_MAP = "frames.map";
 constexpr const char * KEY_FRAME_ODOM = "frames.odom";
 constexpr const char * KEY_FRAME_BASE = "frames.base";
 
-/// The kachaka measurements of design section 7; robot/kachaka.yaml repeats them and is authority.
-constexpr double DEFAULT_INFLATION_RADIUS = 0.55;
-constexpr double DEFAULT_COST_SCALING_FACTOR = 10.0;
-constexpr double DEFAULT_MAX_LINEAR_VEL = 0.30;
-constexpr double DEFAULT_MAX_ANGULAR_VEL = 1.57;
-constexpr double DEFAULT_MAX_ACCEL = 0.5;
-constexpr double DEFAULT_MAX_DECEL = 0.5;
-
-const std::vector<double> & default_footprint()
-{
-  static const std::vector<double> FOOTPRINT{-0.150, -0.120, 0.237,  -0.120,
-                                             0.237,  0.120,  -0.150, 0.120};
-  return FOOTPRINT;
-}
-
 struct RawParameters
 {
   std::vector<double> footprint;
@@ -98,15 +83,18 @@ std::string number(double value)
   return std::to_string(value);
 }
 
-/// Declares the key when it is new, then reads it; every parameter exception becomes one line.
+/// Declared without a fallback on purpose: a key missing from the machine profile has to stop the
+/// node, not silently substitute another robot's measurements.
 template <class T>
-std::optional<std::string> read(rclcpp::Node & node, const char * key, const T & fallback, T & out)
+std::optional<std::string> read(rclcpp::Node & node, const char * key, T & out)
 {
   try {
     if (!node.has_parameter(key)) {
-      node.declare_parameter(key, fallback);
+      node.declare_parameter<T>(key);
     }
     out = node.get_parameter(key).get_value<T>();
+  } catch (const rclcpp::exceptions::ParameterUninitializedException &) {
+    return diagnostic::rejected(key, "is not set; every machine value has to come from a profile");
   } catch (const std::runtime_error & error) {
     return diagnostic::rejected(key, flatten(error.what()));
   }
@@ -115,37 +103,34 @@ std::optional<std::string> read(rclcpp::Node & node, const char * key, const T &
 
 std::optional<std::string> read_all(rclcpp::Node & node, RawParameters & raw)
 {
-  if (auto error = read(node, KEY_FOOTPRINT, default_footprint(), raw.footprint)) {
+  if (auto error = read(node, KEY_FOOTPRINT, raw.footprint)) {
     return error;
   }
-  if (
-    auto error = read(node, KEY_INFLATION_RADIUS, DEFAULT_INFLATION_RADIUS, raw.inflation_radius)) {
+  if (auto error = read(node, KEY_INFLATION_RADIUS, raw.inflation_radius)) {
     return error;
   }
-  if (
-    auto error =
-      read(node, KEY_COST_SCALING_FACTOR, DEFAULT_COST_SCALING_FACTOR, raw.cost_scaling_factor)) {
+  if (auto error = read(node, KEY_COST_SCALING_FACTOR, raw.cost_scaling_factor)) {
     return error;
   }
-  if (auto error = read(node, KEY_MAX_LINEAR_VEL, DEFAULT_MAX_LINEAR_VEL, raw.max_linear_vel)) {
+  if (auto error = read(node, KEY_MAX_LINEAR_VEL, raw.max_linear_vel)) {
     return error;
   }
-  if (auto error = read(node, KEY_MAX_ANGULAR_VEL, DEFAULT_MAX_ANGULAR_VEL, raw.max_angular_vel)) {
+  if (auto error = read(node, KEY_MAX_ANGULAR_VEL, raw.max_angular_vel)) {
     return error;
   }
-  if (auto error = read(node, KEY_MAX_ACCEL, DEFAULT_MAX_ACCEL, raw.max_accel)) {
+  if (auto error = read(node, KEY_MAX_ACCEL, raw.max_accel)) {
     return error;
   }
-  if (auto error = read(node, KEY_MAX_DECEL, DEFAULT_MAX_DECEL, raw.max_decel)) {
+  if (auto error = read(node, KEY_MAX_DECEL, raw.max_decel)) {
     return error;
   }
-  if (auto error = read(node, KEY_FRAME_MAP, std::string("map"), raw.frame_map)) {
+  if (auto error = read(node, KEY_FRAME_MAP, raw.frame_map)) {
     return error;
   }
-  if (auto error = read(node, KEY_FRAME_ODOM, std::string("odom"), raw.frame_odom)) {
+  if (auto error = read(node, KEY_FRAME_ODOM, raw.frame_odom)) {
     return error;
   }
-  return read(node, KEY_FRAME_BASE, std::string("base_footprint"), raw.frame_base);
+  return read(node, KEY_FRAME_BASE, raw.frame_base);
 }
 
 /// Length and finiteness come first: eltanin's predicates read NaN vertices as an ordinary shape.

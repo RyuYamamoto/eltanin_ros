@@ -12,11 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License
 
-"""Keep config/robot/*.yaml a complete machine profile that matches declare_robot_profile().
+"""Keep config/robot/*.yaml a complete machine profile: declare_robot_profile() has no fallbacks.
 
-A key spelled wrongly here does not fail: it falls back to the C++ default, and the yaml stops
-describing the machine. The expected values are copied from robot_profile.cpp, so a change there
-has to be made here too.
+A key spelled wrongly here stops the node with that key named, which is the point. What this file
+guards is the other direction: a profile that is missing a key, or carries one nobody declares.
 """
 
 from pathlib import Path
@@ -38,18 +37,8 @@ ROBOT_KEYS = {
 }
 FRAME_KEYS = {"map", "odom", "base"}
 
-# eltanin_ros_common/src/robot_profile.cpp: default_footprint() and the DEFAULT_* constants.
+# The kachaka collision box of design section 2.6, in base_link.
 KACHAKA_FOOTPRINT = [-0.150, -0.120, 0.237, -0.120, 0.237, 0.120, -0.150, 0.120]
-CPP_DEFAULTS = {
-    "footprint": KACHAKA_FOOTPRINT,
-    "inflation_radius": 0.55,
-    "cost_scaling_factor": 10.0,
-    "max_linear_vel": 0.30,
-    "max_angular_vel": 1.57,
-    "max_accel": 0.5,
-    "max_decel": 0.5,
-}
-CPP_FRAMES = {"map": "map", "odom": "odom", "base": "base_footprint"}
 
 # The simulator models kachaka, so the geometry is shared and only the limits may differ.
 SHARED_KEYS = ["footprint", "inflation_radius", "cost_scaling_factor"]
@@ -89,14 +78,6 @@ def test_limits_are_positive_floats(name):
         assert isinstance(robot[key], float)
         # validate_positive() in robot_profile.cpp refuses zero and negatives.
         assert robot[key] > 0.0
-
-
-def test_kachaka_matches_the_cpp_defaults():
-    # The duplication is deliberate: one readable file, and defaults that start on their own.
-    parameters = profile("kachaka")
-    for key, expected in CPP_DEFAULTS.items():
-        assert parameters["robot"][key] == pytest.approx(expected), key
-    assert parameters["frames"] == CPP_FRAMES
 
 
 def test_kachaka_footprint_is_the_collision_box_not_a_square():
