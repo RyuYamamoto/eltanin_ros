@@ -30,7 +30,8 @@ add_library(${PROJECT_NAME} SHARED
   src/map_conversion.cpp
   src/marker_conversion.cpp
   src/path_conversion.cpp
-  src/scan_conversion.cpp)
+  src/scan_conversion.cpp
+  src/trajectory_conversion.cpp)
 target_include_directories(${PROJECT_NAME} PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
   "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>")
@@ -99,6 +100,7 @@ if(BUILD_TESTING)
       test_marker_conversion
       test_path_conversion
       test_scan_conversion
+      test_trajectory_conversion
       test_outcome_constants)
     ament_add_gtest(${test_name} test/${test_name}.cpp)
     target_link_libraries(${test_name} ${PROJECT_NAME})
