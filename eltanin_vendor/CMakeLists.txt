@@ -19,6 +19,14 @@ set(ELTANIN_VENDOR_GIT_TAG ""
 # -DELTANIN_VENDOR_BUILD_TYPE=Debug during development to get the asserts back.
 set(ELTANIN_VENDOR_BUILD_TYPE "RelWithDebInfo"
     CACHE STRING "CMAKE_BUILD_TYPE for the eltanin sub-build")
+# OFF matches eltanin's own default and keeps the build offline. ON adds the MPC follower, which
+# pulls OSQP: with the "fetch" provider that is a git clone during the build. eltanin installs OSQP
+# into this same prefix and its package config calls find_dependency(osqp), so nothing else here
+# has to know about it - but ELTANIN_WITH_MPC does reach every downstream translation unit through
+# the exported target, and eltanin_controller compiles differently with and without it.
+option(ELTANIN_VENDOR_ENABLE_MPC "Build eltanin's MPC path follower and its QP backend" OFF)
+set(ELTANIN_VENDOR_MPC_SOLVER_PROVIDER "fetch"
+    CACHE STRING "Where OSQP comes from when ELTANIN_VENDOR_ENABLE_MPC is ON: fetch or package")
 
 if(ELTANIN_VENDOR_GIT_URL)
   if(NOT ELTANIN_VENDOR_GIT_TAG)
@@ -59,6 +67,8 @@ ExternalProject_Add(eltanin_external
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON
     -DELTANIN_BUILD_TESTS=OFF
     -DELTANIN_BUILD_EXAMPLES=OFF
+    -DELTANIN_ENABLE_MPC=${ELTANIN_VENDOR_ENABLE_MPC}
+    -DELTANIN_MPC_SOLVER_PROVIDER=${ELTANIN_VENDOR_MPC_SOLVER_PROVIDER}
   # eltanin is developed alongside this repository, so a plain timestamp check would silently ship a
   # stale library. BUILD_ALWAYS re-runs the build and install steps every time; measured cost is
   # 0.53 s for a no-op rebuild against 16.8 s for a clean one.
