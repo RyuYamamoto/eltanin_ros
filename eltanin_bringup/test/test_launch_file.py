@@ -17,6 +17,7 @@
 import ast
 import importlib.util
 from pathlib import Path
+import re
 
 import pytest
 
@@ -25,7 +26,9 @@ from launch.actions import DeclareLaunchArgument
 from launch.substitutions import TextSubstitution
 from launch_ros.actions import ComposableNodeContainer, Node
 
-LAUNCH_FILE = Path(__file__).resolve().parents[1] / "launch" / "eltanin_bringup.launch.py"
+PACKAGE = Path(__file__).resolve().parents[1]
+LAUNCH_FILE = PACKAGE / "launch" / "eltanin_bringup.launch.py"
+README = PACKAGE.parent / "README.md"
 
 # autostart_output is absent on purpose: its consumer is collision_predictor (task 12).
 EXPECTED_ARGUMENTS = {
@@ -92,6 +95,25 @@ def test_the_description_builds_and_declares_its_arguments():
     for argument in arguments:
         # --show-args prints these.
         assert argument.description
+
+
+def documented_arguments():
+    """The first column of the argument table under the Arguments heading in README.md."""
+    lines = README.read_text(encoding="utf-8").splitlines()
+    start = lines.index("### Arguments")
+    found = set()
+    for line in lines[start + 1 :]:
+        if line.startswith("#"):
+            break
+        match = re.match(r"\|\s*`([^`]+)`\s*\|", line)
+        if match:
+            found.add(match.group(1))
+    return found
+
+
+def test_the_readme_table_lists_every_argument():
+    # An argument nobody documented is one nobody passes; the table drifted once already.
+    assert documented_arguments() == EXPECTED_ARGUMENTS
 
 
 def text(value):

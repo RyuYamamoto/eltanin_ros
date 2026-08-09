@@ -145,7 +145,7 @@ creates it, so that nothing looks available before it is.
 | `eltanin_controller` | `path_follower` and `collision_predictor` nodes | not implemented (tasks 11, 12) |
 | `eltanin_navigator` | orchestrator | not implemented (tasks 13, 21) |
 | `eltanin_simulator` | `simple_simulator` node | not implemented (task 10) |
-| `eltanin_bringup` | launch / config / rviz / map, no code | **`eltanin_bringup.launch.py` implemented**; simulation and kachaka bringup in tasks 10 and 22 |
+| `eltanin_bringup` | launch / config / rviz / map, plus the `goal_pose_relay` script | **`eltanin_bringup.launch.py` implemented**; simulation and kachaka bringup in tasks 10 and 22 |
 
 The metapackage's `package.xml` lists one `exec_depend` per implemented package, so the list is also
 the list of what exists.
@@ -578,8 +578,9 @@ runs it at `-O0`:
 
 ## `eltanin_bringup`
 
-The package holds no code: launch, parameters, RViz configuration and the tests that fence them. One
-launch file exists so far, covering the global half of the stack — a map, `global_costmap` and
+Launch, parameters, RViz configuration and the tests that fence them, plus one script:
+`goal_pose_relay`, which exists so that RViz's `2D Goal Pose` can start a plan. One launch file
+exists so far, covering the global half of the stack — a map, `global_costmap` and
 `global_path_planner`. Nothing here drives a robot: there is no controller and no `cmd_vel`
 publisher in the stack yet, so this cannot move anything.
 
@@ -637,9 +638,10 @@ Wait for these two lines before giving a goal — the second one is the costmap 
 [global_costmap] built a 4000x4000 costmap at 0.050000 m from /map, 0 observation cells
 ```
 
-**6. A goal.** RViz has no goal tool on purpose (nothing subscribes to `/goal_pose` until task 13),
-so goals are given on the action. `use_start: false` reads the start from tf; pass `use_start: true`
-with a `start` pose to plan from somewhere else.
+**6. A goal.** Either press `2D Goal Pose` in RViz — `goal_pose_relay` turns that into an action
+goal and logs the outcome — or send the action directly, which is the only way to choose
+`use_start`. `use_start: false` reads the start from tf; pass `use_start: true` with a `start` pose
+to plan from somewhere else.
 
 ```bash
 ros2 action send_goal /global_path_planner/compute_path_to_pose \
@@ -680,7 +682,8 @@ Nothing persists between runs.
 | `use_sim_time` | `false` | Follow `/clock`. Pass `true` with the simulator; the planner's tf timeout only expires while that clock runs. |
 | `use_composition` | `true` | One container, or one process per node. Both paths run the same registered component; the separate one sends 16 MB across a process boundary on every update and is for debugging. |
 | `use_rviz` | `true` | Start RViz with `rviz/eltanin.rviz`. |
-| `map` | empty | Map yaml for `nav2_map_server`. **Empty means no `map_server` at all**, and the static map then comes from whoever else publishes `/map`. |
+| `use_goal_pose_relay` | `true` | Start `goal_pose_relay`, which turns RViz's `2D Goal Pose` into a `compute_path_to_pose` goal. Off leaves the tool with nothing listening. |
+| `map` | empty | Map yaml for `nav2_map_server`. **Empty means no `map_server` at all**, and the static map then comes from whoever else publishes `/map`. **Omit the argument to get that**; `map:=''` is not a way to say it, because the shell hands `ros2 launch` the literal `map:=` and it answers *malformed launch argument*. |
 | `params_file` | `config/navigation.yaml` | Node-specific parameters, keyed by node name. |
 | `rviz_config` | `rviz/eltanin.rviz` | RViz configuration. |
 
@@ -748,27 +751,30 @@ the wrong place.
 
 | Condition | How to check |
 |---|---|
-| The static map is ingested both ways | Launch with `map:=<yaml>`; then launch with `map:=''` and run `map_server` by hand. `/global_costmap/global_costmap_visual` appears either way. |
+| The static map is ingested both ways | Launch with `map:=<yaml>`; then launch with the argument omitted and run `map_server` by hand. `/global_costmap/global_costmap_visual` appears either way. |
 | The global costmap is built and published | `ros2 topic echo --once /global_costmap/global_costmap --field header`. There is no rate to measure: the node has no timer. |
 | A goal produces a path | The action result carries `outcome: 0` and the path, and `/global_path_planner/global_path` carries the same one. The last pose keeps the yaw that was asked for. |
 | RViz shows map, costmap and path | The two `Map` displays and `GlobalPath`, with the transforms from step 4. The costmap uses the `costmap` colour scheme, without which the inflation is one flat shade. |
 | An unreachable goal fails visibly | A goal inside a wall returns `outcome: 5` (`OUTCOME_NO_PATH`) with a `message`; a goal off the map returns `outcome: 2` (`OUTCOME_START_GOAL_FAILED`). Neither is a silent empty path, which is what navyu produced. |
 | A frame mismatch is detected | A goal in `odom` is transformed and succeeds. A goal in a frame tf has never seen returns `outcome: 2`, and the log line names both frames, the stamp and the timeout. An empty `frame_id` is refused rather than assumed to be `map`. |
 
-Run on navyu's 4000x4000 map with the transforms of step 4, `use_rviz:=false`, and — **unlike the
-procedure above** — the default `rmw_fastrtps_cpp` rather than `rmw_zenoh_cpp`, so the numbers below
-say nothing about zenoh. `map_server` read the map in 0.24 s and `global_costmap` built the whole
-area 0.28 s later; `lifecycle_bringup` drove both transitions without a manager node.
+Run on navyu's 4000x4000 map with the transforms of step 4, `use_rviz:=false`, `rmw_zenoh_cpp`, and
+the shipped `navigation.yaml` — so `planner_type` is `hybrid_astar`. `map_server` read the map in
+0.65 s and `global_costmap` built the whole area 0.33 s later; `lifecycle_bringup` drove both
+transitions without a manager node. **The search times below are hybrid A\*'s**: the same goal under
+`planner_type: astar` was measured at 68.5 ms, so a change to that parameter moves them by more than
+an order of magnitude.
 
 | Goal | Result |
 |---|---|
-| `(5.0, 3.0)` in `map`, `use_start: true` from `(0, 0)` | `outcome: 0`, 212 poses, 11.43 m, searched in 68.5 ms |
-| the same with `use_start: false` | identical, so the pose read from tf matches the one passed by hand |
+| `(5.0, 3.0)` in `map`, `use_start: false` | `outcome: 0`, 157 poses, 11.038 m, searched in 1493 ms |
+| the same with `use_composition:=false` | byte-identical plan, so neither start-up path changes the result |
 | `(90, 90)`, unknown space | `outcome: 5` — *rejected goal cell (3799, 3799): cost 255 classifies as Inscribed, not Free; the goal is reported, not moved* |
 | `(500, 0)`, off the map | `outcome: 2` — *it lies outside the 4000x4000 map at 0.050000 m from (-100.000000, -100.000000)* |
-| `(5.0, 3.0)` in `odom` | `outcome: 0` — transformed, then planned |
+| `(3.0, 1.0)` in `odom` | `outcome: 0` — transformed, then planned |
 | the same in `nowhere` | `outcome: 2` — *'nowhere' to frames.map 'map' at 0 ns is not available within 0.100000 s* |
 | the same with an empty `frame_id` | `outcome: 2` — *its header.frame_id is empty; frames.map 'map' is not assumed* |
+| `(4.0, -2.0)` published on `/goal_pose` | `goal_pose_relay` logs *planned a path with 111 poses*, which is the RViz `2D Goal Pose` path end to end |
 
 `ros2 param get` on both nodes returns the same `robot.inflation_radius` and the same
 `robot.footprint`, which is the property the whole parameter layout exists to guarantee.
@@ -787,7 +793,7 @@ they check fails at startup:
 |---|---|
 | `test_robot_profile_config.py` | A profile missing a key (it would fall back to the C++ default and stop describing the machine), a footprint written with integer literals, and a kachaka profile that has drifted from `declare_robot_profile()`'s defaults or stopped being the collision box. |
 | `test_navigation_config.py` | A node-name key no node answers to, a machine value written here as well as in `robot/*.yaml`, a number whose YAML spelling gives it the wrong parameter type, and smoother weights that diverge. |
-| `test_rviz_config.py` | A display whose topic nothing publishes, a display whose publisher is switched off in `navigation.yaml`, the wrong colour scheme on the costmap, and a tool that publishes a topic nobody reads. |
+| `test_rviz_config.py` | A display whose topic nothing publishes, a display whose publisher is switched off in `navigation.yaml`, the wrong colour scheme on the costmap, and a tool whose topic no node started by this launch file reads. |
 | `test_launch_file.py` | An argument read but not declared, an argument declared but not read, the single-threaded container, a component without `use_intra_process_comms`, and the two start-up paths passing different parameters. |
 
 The `test_rviz_config.py` gate is the one worth knowing about when adding a display: a topic that
