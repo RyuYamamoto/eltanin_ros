@@ -57,6 +57,10 @@ EXPECTED = {
         "footprint_marker_stride": int,
         "unknown_is_free": bool,
         "tf_lookup_timeout": float,
+        # A dotted key and a nested block declare the same parameter name; astar.* is written
+        # flat in navigation.yaml, so it is compared flat here.
+        "astar.clearance_penalty": float,
+        "astar.clearance_distance": float,
         "hybrid": {
             "heading_bins": int,
             "minimum_turning_radius": float,
@@ -64,7 +68,14 @@ EXPECTED = {
             "collision_check_step": float,
             "dubins_expansion_distance": float,
             "analytic_expansion_ratio": float,
-            "motion_model": str,
+            "clearance_penalty": float,
+            "clearance_distance": float,
+            "circumscribed_penalty": float,
+            "emit_goal_rotation": bool,
+            "allow_reverse": bool,
+            "allow_turn_in_place": bool,
+            "reverse_penalty": float,
+            "direction_change_penalty": float,
             "heuristic_weight": float,
             "steering_penalty": float,
             "steering_change_penalty": float,

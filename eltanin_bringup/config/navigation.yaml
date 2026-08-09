@@ -58,26 +58,26 @@ global_path_planner:
       # Beyond that, it is tried every (cells to goal / this) nodes. Raising it above 1.0 tries
       # more often and measurably worsens detours (eltanin docs/planner-design.md 13.12).
       analytic_expansion_ratio: 1.0
-      # What the body can do. The analytic tail follows from it: a Dubins path without reverse,
-      # a Reeds-Shepp one with it. Neither is a choice of its own.
-      # The body can drive backwards. The follower has to be able to execute a reversing run.
-      # Extra cost per metre of travel through the inflation band, once the outline lets the
-      # search in. The band is safety margin, not a shortcut: without this the search takes it
-      # wherever it is shorter. 0 restores that.
       # Extra cost per metre travelled near a wall, falling to zero at clearance_distance.
       # Measured from the obstacle itself, so 0.4 means "start paying inside 0.4 m of a wall".
       clearance_penalty: 0.5
       clearance_distance: 0.4
+      # Extra cost per metre of travel through the inflation band, once the outline lets the
+      # search in. The band is safety margin, not a shortcut: without this the search takes it
+      # wherever it is shorter. 0 restores that.
       circumscribed_penalty: 6.0
       # The closing turn onto the goal heading is a pose that shares its position with the one
       # before it. navyu_path_tracker drives towards the next point, so it cannot execute that
       # and circles the goal instead. false folds the heading into the last moving pose.
       emit_goal_rotation: false
+      # The body can drive backwards. The analytic tail follows from it: a Dubins path without
+      # reverse, a Reeds-Shepp one with it. The follower has to be able to execute a reversing
+      # run before this is turned on.
       allow_reverse: false
       # The body can rotate without translating, as a differential drive does. The path then
       # contains consecutive poses that share a position, which the follower has to execute too.
       allow_turn_in_place: true
-      # Multiplies the cost of reversing; only meaningful when the model allows reverse.
+      # Multiplies the cost of reversing; only meaningful when allow_reverse is true.
       reverse_penalty: 2.0
       # Charged per switch between forward and reverse, as a multiple of one motion step.
       direction_change_penalty: 2.0
