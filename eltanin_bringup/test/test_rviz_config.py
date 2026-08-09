@@ -12,19 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License
 
-"""Keep every topic rviz/eltanin.rviz subscribes to one that something actually publishes.
+"""Keep rviz/eltanin.rviz pointed at topics that exist, in both directions.
 
-Some publishers are switched on by a parameter, so the check is against config/navigation.yaml
-rather than a fixed list: adding a display means enabling its publisher in the same commit.
+A display reads a topic, so something in the stack has to publish it; some of those publishers are
+switched on by a parameter, so the check is against config/navigation.yaml rather than a fixed
+list. A tool writes a topic, so the same launch file has to start something that reads it —
+otherwise the button is there and pressing it does nothing.
 """
 
+import importlib.util
 from pathlib import Path
 
 import yaml
 
+from launch.substitutions import TextSubstitution
+
 PACKAGE = Path(__file__).resolve().parents[1]
 RVIZ = PACKAGE / "rviz" / "eltanin.rviz"
 NAVIGATION = PACKAGE / "config" / "navigation.yaml"
+LAUNCH_FILE = PACKAGE / "launch" / "eltanin_bringup.launch.py"
 
 # Topic -> the parameter that has to be true for a publisher to exist. None means always.
 PUBLISHERS = {
@@ -39,7 +45,8 @@ PUBLISHERS = {
 SCHEMA_ARTIFACTS = {topic + "_updates" for topic in PUBLISHERS}
 
 
-def subscribed_topics():
+def topics_under(section):
+    """Every topic name reachable from one section of the configuration."""
     document = yaml.safe_load(RVIZ.read_text(encoding="utf-8"))
     found = set()
 
@@ -54,7 +61,36 @@ def subscribed_topics():
             for value in node:
                 walk(value)
 
-    walk(document)
+    walk(document["Visualization Manager"][section])
+    return found
+
+
+def subscribed_topics():
+    return topics_under("Displays")
+
+
+def tool_topics():
+    return topics_under("Tools")
+
+
+def text(value):
+    """Flatten a normalized substitution list back to its literal text."""
+    if isinstance(value, TextSubstitution):
+        return value.text
+    if isinstance(value, (list, tuple)):
+        return "".join(text(item) for item in value)
+    return str(value)
+
+
+def remapped_destinations():
+    """The topic names the launch file remaps its own nodes onto."""
+    spec = importlib.util.spec_from_file_location("eltanin_bringup_launch", LAUNCH_FILE)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    found = set()
+    for entity in module.generate_launch_description().entities:
+        for _, destination in getattr(entity, "_Node__remappings", None) or []:
+            found.add(text(destination))
     return found
 
 
@@ -105,8 +141,18 @@ def test_the_costmap_uses_the_costmap_colour_scheme():
 
 
 def test_no_tool_publishes_a_topic_nobody_reads():
+    # The mirror of the display check: a button whose topic no launched node reads is the same
+    # defect seen from the other side. /goal_pose is read by goal_pose_relay, remapped onto it.
+    unread = sorted(tool_topics() - remapped_destinations())
+    assert not unread, (
+        f"{unread} is published by an rviz tool, but eltanin_bringup.launch.py starts nothing "
+        "that reads it. Either drop the tool or launch its subscriber in the same commit."
+    )
+
+
+def test_the_goal_tool_reaches_the_planner():
     document = yaml.safe_load(RVIZ.read_text(encoding="utf-8"))
     tools = {tool["Class"] for tool in document["Visualization Manager"]["Tools"]}
-    # SetGoal publishes /goal_pose, which nothing subscribes to until navigator (task 13).
-    assert "rviz_default_plugins/SetGoal" not in tools
-    assert "rviz_default_plugins/SetInitialPose" not in tools
+    # The whole point of goal_pose_relay: 2D Goal Pose has to be able to start a plan.
+    assert "rviz_default_plugins/SetGoal" in tools
+    assert "/goal_pose" in tool_topics()
