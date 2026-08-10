@@ -44,7 +44,10 @@ std::string reject(
 ConversionResult<eltanin::Path> to_path(const eltanin_msgs::msg::Trajectory2D & msg)
 {
   std::vector<eltanin::Pose2D> poses;
+  std::vector<eltanin::Direction> directions;
   poses.reserve(msg.points.size());
+  directions.reserve(msg.points.empty() ? 0 : msg.points.size() - 1);
+  bool reverses = false;
   for (std::size_t i = 0; i < msg.points.size(); ++i) {
     const eltanin_msgs::msg::TrajectoryPoint2D & point = msg.points[i];
     if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.theta)) {
@@ -53,10 +56,27 @@ ConversionResult<eltanin::Path> to_path(const eltanin_msgs::msg::Trajectory2D & 
         "point (x=" + std::to_string(point.x) + ", y=" + std::to_string(point.y) +
           ", theta=" + std::to_string(point.theta) + ") must be finite"));
     }
+    if (!std::isfinite(point.linear_velocity)) {
+      return ConversionResult<eltanin::Path>::failure(reject(
+        msg.header.frame_id, msg.points.size(), i,
+        "linear_velocity (" + std::to_string(point.linear_velocity) + ") must be finite"));
+    }
     poses.push_back(
       eltanin::Pose2D{Eigen::Vector2d{point.x, point.y}, eltanin::normalize_angle(point.theta)});
+    // The speed annotates the point it is on, so it is the segment leaving that point.
+    if (i + 1 < msg.points.size()) {
+      const eltanin::Direction direction =
+        point.linear_velocity < 0.0 ? eltanin::Direction::Reverse : eltanin::Direction::Forward;
+      reverses = reverses || direction == eltanin::Direction::Reverse;
+      directions.push_back(direction);
+    }
   }
-  return ConversionResult<eltanin::Path>::success(eltanin::Path(std::move(poses)));
+  // A trajectory that never reverses is an all-forward path, which carries no direction array.
+  if (!reverses) {
+    directions.clear();
+  }
+  return ConversionResult<eltanin::Path>::success(
+    eltanin::Path(std::move(poses), std::move(directions)));
 }
 
 }  // namespace eltanin_ros_common

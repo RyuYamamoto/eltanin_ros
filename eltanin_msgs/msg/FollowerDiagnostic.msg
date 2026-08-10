@@ -14,6 +14,7 @@ uint8 STATUS_NO_PATH=0
 uint8 STATUS_TRACKING=1
 uint8 STATUS_GOAL_REACHED=2
 uint8 STATUS_SOLVER_FAILED=3
+uint8 STATUS_PATH_NOT_SUPPORTED=4
 uint8 status
 
 # eltanin::control::GoalApproach::State, same rule.
@@ -62,3 +63,17 @@ float64 control_dt
 # GoalApproach::Result::align_elapsed [s], so that yaw_align_timeout - align_elapsed is readable
 # from outside before the timeout fires rather than only after it.
 float64 align_elapsed
+
+# eltanin::Direction, same declaration order and the same values as DirectedPath.
+uint8 DIRECTION_FORWARD=0
+uint8 DIRECTION_REVERSE=1
+uint8 DIRECTION_IN_PLACE=2
+# How the run being executed is driven. DIRECTION_FORWARD on a follower that has no runs.
+uint8 travel_direction
+
+# Runs already finished on this path; 0 on the first one. A run ends at a cusp or at the goal.
+uint32 run_index
+
+# Pose index of the cusp that ends the current run; meaningful only when has_cusp is true.
+uint32 cusp_index
+bool has_cusp

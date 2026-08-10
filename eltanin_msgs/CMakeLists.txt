@@ -17,6 +17,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   msg/CostmapUpdate.msg
   msg/TrajectoryPoint2D.msg
   msg/Trajectory2D.msg
+  msg/DirectedPath.msg
   msg/NavigationState.msg
   msg/FollowerDiagnostic.msg
   action/NavigateToPose.action

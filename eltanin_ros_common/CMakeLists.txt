@@ -26,6 +26,7 @@ endif()
 
 add_library(${PROJECT_NAME} SHARED
   src/cost_conversion.cpp
+  src/directed_path_conversion.cpp
   src/geometry_conversion.cpp
   src/map_conversion.cpp
   src/marker_conversion.cpp
@@ -101,6 +102,7 @@ if(BUILD_TESTING)
   foreach(test_name
       test_conversion_result
       test_cost_conversion
+      test_directed_path_conversion
       test_geometry_conversion
       test_map_conversion
       test_marker_conversion

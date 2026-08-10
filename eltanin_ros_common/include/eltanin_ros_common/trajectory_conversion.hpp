@@ -24,8 +24,8 @@
 namespace eltanin_ros_common
 {
 
-/// Drops the velocity annotation no eltanin type can carry yet; an empty trajectory is not an
-/// error.
+/// Drops the speed no eltanin type can carry, but keeps its sign as the segment direction; an
+/// empty trajectory is not an error.
 ConversionResult<eltanin::Path> to_path(const eltanin_msgs::msg::Trajectory2D & msg);
 
 }  // namespace eltanin_ros_common
