@@ -45,6 +45,9 @@ public:
     stamp_ns_ = stamp.nanoseconds();
   }
 
+  /// Drops the held value, so get() reports nothing received until the next update().
+  void clear() { value_.reset(); }
+
   /// Valid until the next update() and never beyond this object; copy the value out, do not store.
   const T * get(const rclcpp::Time & now) const noexcept
   {

@@ -28,6 +28,7 @@ add_library(${PROJECT_NAME} SHARED
   src/command_composition.cpp
   src/follower_parameters.cpp
   src/limiter_diagnostic.cpp
+  src/limiter_inputs.cpp
   src/limiter_parameters.cpp
   src/path_follower.cpp
   src/path_input.cpp)
@@ -71,6 +72,7 @@ if(BUILD_TESTING)
       test_command_composition
       test_follower_parameters
       test_limiter_diagnostic
+      test_limiter_inputs
       test_limiter_parameters
       test_path_input)
     ament_add_gtest(${test_name} test/${test_name}.cpp)

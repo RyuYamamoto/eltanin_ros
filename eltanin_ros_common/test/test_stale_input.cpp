@@ -205,6 +205,24 @@ TEST(StaleInputTest, UpdateReplacesValueAndStampTogether)
   EXPECT_EQ(*value, "second");
 }
 
+TEST(StaleInputTest, ClearForgetsTheValueWithoutForgettingTheDeadline)
+{
+  StaleInput<std::string> input(TIMEOUT);
+  input.update("first", ros_time(BASE_NS));
+  ASSERT_NE(input.get(ros_time(BASE_NS)), nullptr);
+
+  input.clear();
+
+  EXPECT_EQ(input.get(ros_time(BASE_NS)), nullptr);
+  EXPECT_FALSE(input.elapsed_seconds(ros_time(BASE_NS)).has_value());
+  EXPECT_TRUE(input.timeout_is_usable());
+
+  input.update("second", ros_time(BASE_NS));
+  const std::string * value = input.get(ros_time(BASE_NS));
+  ASSERT_NE(value, nullptr);
+  EXPECT_EQ(*value, "second");
+}
+
 TEST(StaleInputTest, HoldsACostmap)
 {
   const eltanin::map::MapGeometry geometry(4, 4, 0.05, Eigen::Vector2d::Zero());
