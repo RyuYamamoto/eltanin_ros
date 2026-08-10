@@ -6,6 +6,7 @@ find_package(ament_cmake REQUIRED)
 find_package(eltanin REQUIRED)
 find_package(eltanin_msgs REQUIRED)
 find_package(builtin_interfaces REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -26,6 +27,7 @@ endif()
 
 add_library(${PROJECT_NAME} SHARED
   src/cost_conversion.cpp
+  src/diagnostic_conversion.cpp
   src/directed_path_conversion.cpp
   src/geometry_conversion.cpp
   src/map_conversion.cpp
@@ -47,6 +49,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
   eltanin::sensor
   ${eltanin_msgs_TARGETS}
   ${builtin_interfaces_TARGETS}
+  ${diagnostic_msgs_TARGETS}
   ${geometry_msgs_TARGETS}
   ${nav_msgs_TARGETS}
   ${sensor_msgs_TARGETS}
@@ -85,6 +88,7 @@ ament_export_dependencies(
   eltanin
   eltanin_msgs
   builtin_interfaces
+  diagnostic_msgs
   geometry_msgs
   nav_msgs
   rclcpp
@@ -102,6 +106,7 @@ if(BUILD_TESTING)
   foreach(test_name
       test_conversion_result
       test_cost_conversion
+      test_diagnostic_conversion
       test_directed_path_conversion
       test_geometry_conversion
       test_map_conversion

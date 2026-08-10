@@ -17,12 +17,17 @@
 
 #include "eltanin_ros_common/conversion_result.hpp"
 
+#include <builtin_interfaces/msg/time.hpp>
+#include <eltanin/core/polygon.hpp>
 #include <eltanin/core/types.hpp>
 
+#include <geometry_msgs/msg/polygon_stamped.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <geometry_msgs/msg/quaternion.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <geometry_msgs/msg/twist.hpp>
+
+#include <string>
 
 namespace eltanin_ros_common
 {
@@ -83,6 +88,11 @@ struct Transform2DConversion
 /// Succeeds even when out of plane: a tilted tf is a warning, not a reason to stop navigating.
 ConversionResult<Transform2DConversion> to_transform2d(
   const geometry_msgs::msg::TransformStamped & msg, const PlanarityTolerance & tolerance = {});
+
+/// Vertices in order, z = 0 and no closing repeat; RViz closes a PolygonStamped by itself.
+geometry_msgs::msg::PolygonStamped to_polygon_msg(
+  const eltanin::Polygon2D & polygon, const std::string & frame_id,
+  const builtin_interfaces::msg::Time & stamp);
 
 }  // namespace eltanin_ros_common
 

@@ -29,6 +29,7 @@ namespace
 
 using eltanin_ros_common::PlanarityTolerance;
 using eltanin_ros_common::QUATERNION_NORM_TOLERANCE;
+using eltanin_ros_common::to_polygon_msg;
 using eltanin_ros_common::to_pose2d;
 using eltanin_ros_common::to_pose_msg;
 using eltanin_ros_common::to_quaternion;
@@ -297,6 +298,37 @@ TEST(ToTransform2dTest, RejectsNonFiniteTranslationAndBadRotation)
   const auto rotation =
     to_transform2d(make_transform(0.0, 0.0, 0.0, make_quaternion(0.0, 0.0, 0.0, 0.0)));
   EXPECT_FALSE(rotation.ok());
+}
+
+TEST(ToPolygonMsgTest, KeepsTheVertexOrderAndDoesNotCloseThePolygon)
+{
+  const eltanin::Polygon2D footprint{
+    Eigen::Vector2d{-0.12, 0.12}, Eigen::Vector2d{-0.12, -0.12}, Eigen::Vector2d{0.12, -0.12},
+    Eigen::Vector2d{0.12, 0.12}};
+  builtin_interfaces::msg::Time stamp;
+  stamp.sec = 7;
+  stamp.nanosec = 500000000u;
+
+  const auto msg = to_polygon_msg(footprint, "base_footprint", stamp);
+
+  EXPECT_EQ(msg.header.frame_id, "base_footprint");
+  EXPECT_EQ(msg.header.stamp.sec, 7);
+  EXPECT_EQ(msg.header.stamp.nanosec, 500000000u);
+  ASSERT_EQ(msg.polygon.points.size(), footprint.size());
+  for (std::size_t index = 0; index < footprint.size(); ++index) {
+    EXPECT_FLOAT_EQ(msg.polygon.points[index].x, static_cast<float>(footprint[index].x()));
+    EXPECT_FLOAT_EQ(msg.polygon.points[index].y, static_cast<float>(footprint[index].y()));
+    EXPECT_FLOAT_EQ(msg.polygon.points[index].z, 0.0F);
+  }
+}
+
+TEST(ToPolygonMsgTest, AnEmptyPolygonIsStillAValidMessage)
+{
+  const auto msg =
+    to_polygon_msg(eltanin::Polygon2D{}, "base_footprint", builtin_interfaces::msg::Time{});
+
+  EXPECT_EQ(msg.header.frame_id, "base_footprint");
+  EXPECT_TRUE(msg.polygon.points.empty());
 }
 
 }  // namespace

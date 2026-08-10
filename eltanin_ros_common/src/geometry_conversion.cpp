@@ -178,4 +178,21 @@ ConversionResult<Transform2DConversion> to_transform2d(
     eltanin::Transform2D{Eigen::Vector2d{translation.x, translation.y}, yaw.value()}, deviation});
 }
 
+geometry_msgs::msg::PolygonStamped to_polygon_msg(
+  const eltanin::Polygon2D & polygon, const std::string & frame_id,
+  const builtin_interfaces::msg::Time & stamp)
+{
+  geometry_msgs::msg::PolygonStamped msg;
+  msg.header.stamp = stamp;
+  msg.header.frame_id = frame_id;
+  msg.polygon.points.reserve(polygon.size());
+  for (const Eigen::Vector2d & vertex : polygon) {
+    geometry_msgs::msg::Point32 point;
+    point.x = static_cast<float>(vertex.x());
+    point.y = static_cast<float>(vertex.y());
+    msg.polygon.points.push_back(point);
+  }
+  return msg;
+}
+
 }  // namespace eltanin_ros_common
