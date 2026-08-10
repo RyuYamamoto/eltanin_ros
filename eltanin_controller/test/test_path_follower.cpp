@@ -503,6 +503,32 @@ TEST_F(PathFollowerFixture, ResetTakesEffectBeforeTheNextCommandAndTheRampStarts
   EXPECT_DOUBLE_EQ(last_command().twist.linear.x, 0.0);
 }
 
+TEST_F(PathFollowerFixture, APathPublishedRightAfterAResetIsKeptRatherThanDropped)
+{
+  // What goal_pose_client does: reset, then replan. A plan that comes back in milliseconds used to
+  // land before the reset had been applied, and the next cycle threw the new path away.
+  start();
+  broadcast_robot(0.0, 0.0, 0.0);
+  ASSERT_TRUE(wait_for_commands(2));
+  ASSERT_TRUE(publish_path(make_path(helper_->now())));
+  ASSERT_TRUE(wait_until("the ramp to climb", [this]() { return peak_linear() > 0.1; }));
+
+  ASSERT_TRUE(reset_client_->wait_for_service(DEADLINE));
+  auto future =
+    reset_client_->async_send_request(std::make_shared<std_srvs::srv::Trigger::Request>());
+  ASSERT_EQ(future.wait_for(DEADLINE), std::future_status::ready);
+  ASSERT_TRUE(future.get()->success);
+
+  // No wait: the point is to publish inside the window the old code left open.
+  ASSERT_TRUE(publish_path(make_path(helper_->now())));
+
+  clear();
+  ASSERT_TRUE(wait_until("the follower to take the new path", [this]() {
+    return last_diagnostic().status == Diagnostic::STATUS_TRACKING;
+  }));
+  EXPECT_NE(last_diagnostic().reason, Diagnostic::REASON_NO_INPUT);
+}
+
 TEST_F(PathFollowerFixture, AnAlignmentThatNeverFinishesIsReportedAsNotOk)
 {
   start({rclcpp::Parameter("yaw_align_timeout", 0.2)});

@@ -321,13 +321,11 @@ void PathFollower::on_timer()
 
 PathFollower::CycleOutcome PathFollower::run_cycle(const rclcpp::Time & now)
 {
-  // The held path goes with them. Clearing the controllers alone leaves the old path current for
-  // the cycle before the new one arrives, and the goal approach latches Reached on it again.
+  // The held path was dropped by the service itself; only the controllers are left to clear, and
+  // they belong to this thread. A path that arrived in between is the new one and is kept.
   if (reset_requested_.exchange(false)) {
     follower_->reset();
     approach_.reset();
-    const std::lock_guard<std::mutex> lock(input_mutex_);
-    input_.clear();
   }
 
   const eltanin_ros_common::PeriodicClock::Tick tick = clock_.tick();
@@ -541,6 +539,12 @@ void PathFollower::on_reset(
   const std::shared_ptr<std_srvs::srv::Trigger::Request>,
   std::shared_ptr<std_srvs::srv::Trigger::Response> response)
 {
+  // Dropped here rather than on the next cycle: a caller that resets and replans in one breath
+  // would otherwise have its new path cleared by a reset that had not been applied yet.
+  {
+    const std::lock_guard<std::mutex> lock(input_mutex_);
+    input_.clear();
+  }
   reset_requested_.store(true);
   response->success = true;
   response->message = diagnostic::line(
