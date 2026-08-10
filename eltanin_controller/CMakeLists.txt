@@ -27,6 +27,8 @@ endif()
 add_library(${PROJECT_NAME} SHARED
   src/command_composition.cpp
   src/follower_parameters.cpp
+  src/limiter_diagnostic.cpp
+  src/limiter_parameters.cpp
   src/path_follower.cpp
   src/path_input.cpp)
 target_include_directories(${PROJECT_NAME} PUBLIC
@@ -68,6 +70,8 @@ if(BUILD_TESTING)
   foreach(test_name
       test_command_composition
       test_follower_parameters
+      test_limiter_diagnostic
+      test_limiter_parameters
       test_path_input)
     ament_add_gtest(${test_name} test/${test_name}.cpp)
     target_link_libraries(${test_name} ${PROJECT_NAME})
