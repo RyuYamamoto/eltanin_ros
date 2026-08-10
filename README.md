@@ -171,11 +171,13 @@ construct a node call `rclcpp::init()`, and today that is one file, `test_robot_
 Everything that crosses between `eltanin`'s types and ROS 2 messages is converted here and nowhere
 else: cost value ranges, quaternions, twists, transforms, scans, maps, paths and trajectories.
 
-`to_path()` is overloaded for `nav_msgs/Path` and for `eltanin_msgs/Trajectory2D`, so the caller
-picks by argument type rather than by name. The `Trajectory2D` form **drops the velocity
-annotation**: `eltanin` has no trajectory type and its follower cannot consume a velocity profile
-yet. There is no inverse, because nothing produces a `Trajectory2D` until `local_path_planner`
-exists.
+`to_path()` is overloaded for `nav_msgs/Path`, for `eltanin_msgs/Trajectory2D` and for
+`eltanin_msgs/DirectedPath`, so the caller picks by argument type rather than by name. The
+`Trajectory2D` form **drops the magnitude of the velocity annotation but keeps its sign** as the
+segment direction: `eltanin` has no trajectory type, so the speed has nowhere to go, but which way
+the body drives does. There is no inverse, because nothing produces a `Trajectory2D` until
+`local_path_planner` exists. `DirectedPath` converts both ways, and it is the only form that can
+carry a reversing plan intact.
 
 Conversions never throw. A conversion that can fail returns `ConversionResult<T>`, a check that
 produces no value returns `ConversionStatus`, and a rejection carries **one line** naming the frame,
@@ -482,6 +484,7 @@ property of this code and not of `std::thread::hardware_concurrency()`.
 | `global_costmap/global_costmap_updates` (in) | `eltanin_msgs/CostmapUpdate` | `KeepLast(1)`, reliable, volatile | Applied to the belief. |
 | `~/global_path` (out) | `nav_msgs/Path` | `KeepLast(1)`, reliable, volatile | Smoothed. Published before `succeed()`, so a successful result always has its path on the topic too. |
 | `~/global_path_raw` (out) | `nav_msgs/Path` | same | Unsmoothed; **the publisher only exists when `publish_raw_path` is set**. |
+| `~/global_path_directed` (out) | `eltanin_msgs/DirectedPath` | same | The same poses as `~/global_path` plus how each segment is driven. Empty `segment_directions` means all forward. Always published; RViz cannot draw it, which is why `~/global_path` stays. |
 | `~/footprint_path` (out) | `visualization_msgs/MarkerArray` | same | `robot.footprint` laid along the published path, every `footprint_marker_stride` poses and always at the last one. Only exists when `publish_footprint_path` is set. |
 
 Neither path topic is `transient_local`: a late subscriber would otherwise be handed, as the newest
@@ -673,6 +676,7 @@ ros2 service call /path_follower/reset std_srvs/srv/Trigger
 |---|---|---|---|
 | `path` (default) | `global_path_planner/global_path` | `nav_msgs/Path` | `path_timeout`, default **0 = none** |
 | `trajectory` | `local_path_planner/local_trajectory` | `eltanin_msgs/Trajectory2D` | `trajectory_timeout`, default 0.5 s, must be positive |
+| `directed_path` | `global_path_planner/global_path_directed` | `eltanin_msgs/DirectedPath` | `path_timeout`, as for `path` |
 
 The two deadlines are separate parameters because the inputs are not comparable. A global path is
 published once per replan, so a 0.5 s deadline would make it stale immediately and the follower
@@ -765,7 +769,9 @@ so a `path_follower` started after the planner has to be given the goal again.
 - §6.5, D-17, §8.2 and §10 S4 all assume `PurePursuit::Status` gains an `Approaching` value. It never
   did; approach is `GoalApproach::State`'s vocabulary alone (`eltanin`'s `control-design.md` §12.6).
 - §6.5 names "`control::PurePursuit` (plus the velocity-consuming overload from E-3)". The overload
-  does not exist yet, so **the velocity annotation on `Trajectory2D` is dropped**.
+  does not exist yet, so **the magnitude of `Trajectory2D`'s velocity annotation is dropped**. Its
+  *sign* is not: `to_path(Trajectory2D)` turns it into the segment direction of the `eltanin::Path`
+  it builds, which is the only part of it any follower can act on.
 - §6.5 says a cycle with `dt <= 0` is skipped. It is skipped as far as `eltanin` goes, but
   `~/cmd_vel_raw` and `~/follower_state` are still published: no path in this node stops the publish.
 - §6.5 left `~/follower_state` as "reuse part of `NavigationState`, or put it in diagnostics".
@@ -788,6 +794,26 @@ so a `path_follower` started after the planner has to be given the goal again.
   because the alternative follower is not in the vendored build. `follower_type`, a
   `std::unique_ptr<PathFollower>`, a `pure_pursuit.*` / `mpc.*` parameter split and the odom
   subscription an MPC needs for `FollowerState::twist` all belong to the task that turns the MPC on.
+- The paragraph above is out of date on two counts: `follower_type`, the `std::unique_ptr` and the
+  `pure_pursuit.*` / `mpc.*` split all landed, and `FollowStatus` has a **fifth** value,
+  `PathNotSupported`, for a path the selected follower refuses to execute. The odom subscription is
+  still absent; the follower substitutes the command it returned last cycle.
+- **`path_source` has a third value, `directed_path`.** `nav_msgs/Path` cannot say which way a
+  segment is driven, and a follower that guesses it from the displacement and the body yaw guesses
+  wrong the moment the planner changes how it samples. `eltanin_msgs/DirectedPath` carries the
+  direction per segment; `global_path_planner` publishes it on `~/global_path_directed` **in
+  addition to** `~/global_path`, which is unchanged, still `nav_msgs/Path`, and still what the
+  action result and RViz get.
+- **`mpc.min_linear_vel` may be negative.** A negative value is what allows reversing, and
+  `robot.max_linear_vel` bounds it from below exactly as it bounds `mpc.max_linear_vel` from above:
+  the profile declares one magnitude for both directions. 0 keeps the follower forward-only, and a
+  reversing path then comes back as `STATUS_PATH_NOT_SUPPORTED` with a zero command rather than
+  being mis-followed. `pure_pursuit` refuses one whatever the parameters say.
+- A note on `eltanin`'s own design document rather than this one: `control-design.md` §13.3 called
+  the velocity profile's floor and terminal speed `min_linear_vel` / `terminal_linear_vel`, which
+  collided with `MpcFollowerParams::min_linear_vel`. One is a magnitude and the other is a signed
+  bound; they are now `min_speed` / `terminal_speed`. **No ROS key changed**, because the profile
+  has never been reachable from a parameter.
 
 ## `eltanin_bringup`
 
