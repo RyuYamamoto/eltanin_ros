@@ -17,6 +17,7 @@
 #include "src/diagnostic.hpp"
 
 #include <eltanin/control/follower_factory.hpp>
+#include <eltanin_ros_common/directed_path_conversion.hpp>
 #include <eltanin_ros_common/geometry_conversion.hpp>
 #include <eltanin_ros_common/path_conversion.hpp>
 #include <eltanin_ros_common/trajectory_conversion.hpp>
@@ -91,8 +92,9 @@ PathSource require_path_source(rclcpp::Node & node)
   if (!source.has_value()) {
     refuse_to_start(
       node, diagnostic::rejected(
-              KEY_PATH_SOURCE, "is '" + name + "', not '" + name_of(PathSource::Path) + "' or '" +
-                                 name_of(PathSource::Trajectory) + "'"));
+              KEY_PATH_SOURCE, "is '" + name + "', not '" + name_of(PathSource::Path) + "', '" +
+                                 name_of(PathSource::Trajectory) + "' or '" +
+                                 name_of(PathSource::DirectedPath) + "'"));
   }
   return *source;
 }
@@ -173,12 +175,14 @@ FollowerParameters require_parameters(
   parameters.path_timeout = require_parameter<double>(node, KEY_PATH_TIMEOUT);
 
   // Before validate(), which checks the values the two create() calls are actually handed.
-  const VelocityClamp clamp = apply_velocity_limits(parameters, limits);
-  if (clamp.clamped) {
-    RCLCPP_WARN(
-      node.get_logger(),
-      "%s %f m/s is above robot.max_linear_vel %f m/s; the cruise speed is that limit", clamp.key,
-      clamp.requested, clamp.applied);
+  const VelocityClamps clamps = apply_velocity_limits(parameters, limits);
+  for (const VelocityClamp & clamp : clamps) {
+    if (clamp.clamped) {
+      RCLCPP_WARN(
+        node.get_logger(),
+        "%s %f m/s is outside robot.max_linear_vel %f m/s; the bound is that limit", clamp.key,
+        clamp.requested, clamp.applied);
+    }
   }
 
   const eltanin_ros_common::ConversionStatus status = validate(parameters);
@@ -254,6 +258,9 @@ PathFollower::PathFollower(const rclcpp::NodeOptions & options)
 {
   // Only a geometric follower has a lookahead point; the MPC leaves this null and publishes none.
   pursuit_ = dynamic_cast<eltanin::control::PurePursuit *>(follower_.get());
+#ifdef ELTANIN_WITH_MPC
+  mpc_ = dynamic_cast<eltanin::control::MpcFollower *>(follower_.get());
+#endif
 
   tf_buffer_.setCreateTimerInterface(std::make_shared<tf2_ros::CreateTimerROS>(
     get_node_base_interface(), get_node_timers_interface()));
@@ -278,6 +285,11 @@ PathFollower::PathFollower(const rclcpp::NodeOptions & options)
       "local_path_planner/local_trajectory", control_qos(),
       [this](eltanin_msgs::msg::Trajectory2D::ConstSharedPtr msg) { on_trajectory(msg); },
       input_options);
+  } else if (parameters_.path_source == PathSource::DirectedPath) {
+    directed_path_subscription_ = create_subscription<eltanin_msgs::msg::DirectedPath>(
+      "global_path_planner/global_path_directed", control_qos(),
+      [this](eltanin_msgs::msg::DirectedPath::ConstSharedPtr msg) { on_directed_path(msg); },
+      input_options);
   } else {
     path_subscription_ = create_subscription<nav_msgs::msg::Path>(
       "global_path_planner/global_path", control_qos(),
@@ -296,9 +308,7 @@ PathFollower::PathFollower(const rclcpp::NodeOptions & options)
     control_group_);
 
   RCLCPP_INFO(
-    get_logger(), "following %s at %f Hz with the %s follower",
-    parameters_.path_source == PathSource::Trajectory ? trajectory_subscription_->get_topic_name()
-                                                      : path_subscription_->get_topic_name(),
+    get_logger(), "following %s at %f Hz with the %s follower", input_topic_name(),
     parameters_.update_frequency, name_of(parameters_.follower.type));
 }
 
@@ -406,6 +416,15 @@ PathFollower::CycleOutcome PathFollower::run_cycle(const rclcpp::Time & now)
   cycle.yaw_error = approach.yaw_error;
   cycle.align_elapsed = approach.align_elapsed;
   cycle.control_dt = tick.seconds;
+#ifdef ELTANIN_WITH_MPC
+  if (mpc_ != nullptr) {
+    const eltanin::control::MpcRunProgress & run = mpc_->run_progress();
+    cycle.travel_direction = run.direction;
+    cycle.run_index = run.run_index;
+    cycle.cusp_index = run.cusp_index;
+    cycle.has_cusp = run.has_cusp;
+  }
+#endif
   if (cycle.outcome.reason != Diagnostic::REASON_NONE) {
     cycle.message = diagnostic::line(
       "eltanin returned status " + std::to_string(cycle.outcome.status) + " and approach state " +
@@ -438,6 +457,10 @@ void PathFollower::publish_cycle(const CycleOutcome & cycle, const rclcpp::Time 
   diagnostic.lookahead_index = static_cast<std::uint32_t>(cycle.outcome.lookahead_index);
   diagnostic.control_dt = cycle.control_dt;
   diagnostic.align_elapsed = cycle.align_elapsed;
+  diagnostic.travel_direction = eltanin_ros_common::to_direction_msg(cycle.travel_direction);
+  diagnostic.run_index = static_cast<std::uint32_t>(cycle.run_index);
+  diagnostic.cusp_index = static_cast<std::uint32_t>(cycle.cusp_index);
+  diagnostic.has_cusp = cycle.has_cusp;
   diagnostic_publisher_->publish(diagnostic);
 
   if (!cycle.outcome.has_lookahead) {
@@ -459,6 +482,22 @@ void PathFollower::on_path(nav_msgs::msg::Path::ConstSharedPtr msg)
 void PathFollower::on_trajectory(eltanin_msgs::msg::Trajectory2D::ConstSharedPtr msg)
 {
   accept_path(msg->header, eltanin_ros_common::to_path(*msg));
+}
+
+void PathFollower::on_directed_path(eltanin_msgs::msg::DirectedPath::ConstSharedPtr msg)
+{
+  accept_path(msg->header, eltanin_ros_common::to_path(*msg));
+}
+
+const char * PathFollower::input_topic_name() const
+{
+  if (parameters_.path_source == PathSource::Trajectory) {
+    return trajectory_subscription_->get_topic_name();
+  }
+  if (parameters_.path_source == PathSource::DirectedPath) {
+    return directed_path_subscription_->get_topic_name();
+  }
+  return path_subscription_->get_topic_name();
 }
 
 void PathFollower::accept_path(

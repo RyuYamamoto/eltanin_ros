@@ -65,6 +65,8 @@ std::uint8_t to_wire(FollowStatus status) noexcept
       return Diagnostic::STATUS_GOAL_REACHED;
     case FollowStatus::SolverFailed:
       return Diagnostic::STATUS_SOLVER_FAILED;
+    case FollowStatus::PathNotSupported:
+      return Diagnostic::STATUS_PATH_NOT_SUPPORTED;
   }
   return Diagnostic::STATUS_NO_PATH;
 }

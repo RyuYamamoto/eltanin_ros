@@ -7,7 +7,9 @@
 path_follower:
   ros__parameters:
     update_frequency: 20.0
-    # path or trajectory. local_path_planner does not exist yet, so the global path is followed.
+    # path, directed_path or trajectory. local_path_planner does not exist yet, so the global path
+    # is followed. directed_path is the same path with the direction each segment is driven in,
+    # which is what a reversing plan needs; only the mpc follower can execute one.
     path_source: path
     # pure_pursuit or mpc. mpc needs eltanin_vendor built with ELTANIN_VENDOR_ENABLE_MPC=ON.
     follower_type: pure_pursuit
@@ -37,7 +39,10 @@ path_follower:
       prediction_horizon: 20
       # Capped at robot.max_linear_vel like the pure pursuit cruise speed.
       max_linear_vel: 0.5
-      # 0 forbids reversing, as every follower here does.
+      # A negative value allows reversing and is the lowest speed the body may be commanded;
+      # -max_linear_vel is as low as it may go, since robot.max_linear_vel bounds the magnitude in
+      # both directions. 0 forbids reversing, and then a reversing path is refused rather than
+      # mis-followed.
       min_linear_vel: 0.0
       max_linear_accel: 1.0
       # eltanin calls this one a guess: it was never measured on the robot. Halve it if the

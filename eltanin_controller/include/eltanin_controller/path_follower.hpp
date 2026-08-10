@@ -28,6 +28,7 @@
 #include <eltanin_ros_common/warn_once.hpp>
 #include <rclcpp/rclcpp.hpp>
 
+#include <eltanin_msgs/msg/directed_path.hpp>
 #include <eltanin_msgs/msg/follower_diagnostic.hpp>
 #include <eltanin_msgs/msg/trajectory2_d.hpp>
 #include <geometry_msgs/msg/point_stamped.hpp>
@@ -66,6 +67,11 @@ private:
     double yaw_error{0.0};
     double align_elapsed{0.0};
     double control_dt{0.0};
+    /// Which run of the path is being executed; a follower without runs reports the first one.
+    eltanin::Direction travel_direction{eltanin::Direction::Forward};
+    std::size_t run_index{0};
+    std::size_t cusp_index{0};
+    bool has_cusp{false};
     /// Built only when the reason is not REASON_NONE, so a tracking cycle allocates no string.
     std::string message;
   };
@@ -80,6 +86,11 @@ private:
 
   void on_path(nav_msgs::msg::Path::ConstSharedPtr msg);
   void on_trajectory(eltanin_msgs::msg::Trajectory2D::ConstSharedPtr msg);
+
+  void on_directed_path(eltanin_msgs::msg::DirectedPath::ConstSharedPtr msg);
+
+  /// The one topic path_source selected; valid once the subscription is created.
+  const char * input_topic_name() const;
 
   /// Accepts what either subscription produced; the frame check and the bookkeeping are shared.
   void accept_path(
@@ -100,6 +111,10 @@ private:
   std::unique_ptr<eltanin::control::PathFollower> follower_;
   /// Non-owning view of follower_ when it is a pure pursuit; the MPC publishes no lookahead point.
   eltanin::control::PurePursuit * pursuit_{nullptr};
+#ifdef ELTANIN_WITH_MPC
+  /// Only the MPC tracks runs; the others leave this null and report a forward first run.
+  eltanin::control::MpcFollower * mpc_{nullptr};
+#endif
   eltanin::control::GoalApproach approach_;
 
   /// Set by ~/reset alone; the path subscription never touches the two controllers.
@@ -115,6 +130,7 @@ private:
   rclcpp::TimerBase::SharedPtr timer_;
   rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr path_subscription_;
   rclcpp::Subscription<eltanin_msgs::msg::Trajectory2D>::SharedPtr trajectory_subscription_;
+  rclcpp::Subscription<eltanin_msgs::msg::DirectedPath>::SharedPtr directed_path_subscription_;
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr command_publisher_;
   rclcpp::Publisher<eltanin_msgs::msg::FollowerDiagnostic>::SharedPtr diagnostic_publisher_;
   rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr lookahead_publisher_;

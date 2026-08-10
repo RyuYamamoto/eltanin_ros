@@ -22,6 +22,7 @@
 #include <eltanin_ros_common/conversion_result.hpp>
 #include <eltanin_ros_common/robot_profile.hpp>
 
+#include <array>
 #include <optional>
 #include <string_view>
 
@@ -69,7 +70,7 @@ inline constexpr const char * KEY_MPC_SOLVER_WARM_START = "mpc.solver.warm_start
 inline constexpr const char * KEY_MPC_SOLVER_POLISH = "mpc.solver.polish";
 #endif
 
-enum class PathSource { Path, Trajectory };
+enum class PathSource { Path, Trajectory, DirectedPath };
 
 const char * name_of(PathSource source) noexcept;
 
@@ -97,8 +98,11 @@ struct VelocityClamp
   double applied{0.0};
 };
 
-/// Spreads robot.max_angular_vel over the approach and the followers, and caps the cruise speed.
-VelocityClamp apply_velocity_limits(
+/// The cruise speed and, for a follower that can reverse, the reverse floor.
+using VelocityClamps = std::array<VelocityClamp, 2>;
+
+/// Spreads robot.max_angular_vel over the approach and the followers, and caps both speed bounds.
+VelocityClamps apply_velocity_limits(
   FollowerParameters & parameters, const eltanin_ros_common::VelocityLimits & limits);
 
 /// The first violated condition only, for the selected follower and the goal approach.

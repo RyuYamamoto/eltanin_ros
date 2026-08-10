@@ -24,6 +24,7 @@
 #include <eltanin_msgs/action/compute_path_to_pose.hpp>
 #include <eltanin_msgs/msg/costmap.hpp>
 #include <eltanin_msgs/msg/costmap_update.hpp>
+#include <eltanin_msgs/msg/directed_path.hpp>
 #include <eltanin_msgs/msg/navigation_state.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
@@ -169,6 +170,9 @@ protected:
     raw_path_subscription_ = helper_->create_subscription<nav_msgs::msg::Path>(
       "/global_path_planner/global_path_raw", rclcpp::QoS(rclcpp::KeepLast(1)).reliable(),
       [this](nav_msgs::msg::Path::ConstSharedPtr msg) { last_raw_path_ = msg; });
+    directed_path_subscription_ = helper_->create_subscription<eltanin_msgs::msg::DirectedPath>(
+      "/global_path_planner/global_path_directed", rclcpp::QoS(rclcpp::KeepLast(1)).reliable(),
+      [this](eltanin_msgs::msg::DirectedPath::ConstSharedPtr msg) { last_directed_path_ = msg; });
 
     executor_ = std::make_shared<rclcpp::executors::MultiThreadedExecutor>();
     executor_->add_node(helper_);
@@ -300,10 +304,12 @@ protected:
   rclcpp::Publisher<eltanin_msgs::msg::CostmapUpdate>::SharedPtr patch_publisher_;
   rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr path_subscription_;
   rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr raw_path_subscription_;
+  rclcpp::Subscription<eltanin_msgs::msg::DirectedPath>::SharedPtr directed_path_subscription_;
   std::shared_ptr<tf2_ros::StaticTransformBroadcaster> broadcaster_;
   rclcpp_action::Client<Action>::SharedPtr client_;
   nav_msgs::msg::Path::ConstSharedPtr last_path_;
   nav_msgs::msg::Path::ConstSharedPtr last_raw_path_;
+  eltanin_msgs::msg::DirectedPath::ConstSharedPtr last_directed_path_;
 };
 
 TEST_F(GlobalPathPlannerFixture, StartsWithNoParametersAtAll)
@@ -425,6 +431,33 @@ TEST_F(GlobalPathPlannerFixture, ASuccessfulPlanPublishesThePathItReturnsAndKeep
   const auto yaw = eltanin_ros_common::to_yaw(result->path.poses.back().pose.orientation);
   ASSERT_TRUE(yaw.ok()) << yaw.error();
   EXPECT_NEAR(yaw.value(), goal_yaw, 1e-9);
+}
+
+TEST_F(GlobalPathPlannerFixture, ThePathIsAlsoPublishedWithTheDirectionOfEverySegment)
+{
+  start({rclcpp::Parameter("planner_type", "hybrid_astar")});
+  ASSERT_TRUE(publish_costmap(make_costmap_msg(1)));
+  last_path_ = nullptr;
+  last_directed_path_ = nullptr;
+
+  const auto result = plan(make_goal());
+  ASSERT_NE(result, nullptr);
+  ASSERT_EQ(result->outcome, NavigationState::OUTCOME_REACHED) << result->message;
+
+  ASSERT_TRUE(wait_until(
+    "the directed path is published", [this]() { return last_directed_path_ != nullptr; }));
+  EXPECT_EQ(last_directed_path_->header.frame_id, "map");
+  EXPECT_EQ(last_directed_path_->poses.size(), result->path.poses.size());
+  // The array is either empty, meaning all forward, or one entry per segment.
+  EXPECT_TRUE(
+    last_directed_path_->segment_directions.empty() ||
+    last_directed_path_->segment_directions.size() + 1 == last_directed_path_->poses.size());
+  for (const std::uint8_t direction : last_directed_path_->segment_directions) {
+    EXPECT_LE(direction, eltanin_msgs::msg::DirectedPath::DIRECTION_IN_PLACE);
+  }
+  // nav_msgs/Path keeps going out unchanged; the new topic is an addition, not a replacement.
+  ASSERT_TRUE(wait_until("the path is published", [this]() { return last_path_ != nullptr; }));
+  EXPECT_EQ(last_path_->poses.size(), last_directed_path_->poses.size());
 }
 
 TEST_F(GlobalPathPlannerFixture, NoRawPathPublisherExistsUnlessItIsAskedFor)

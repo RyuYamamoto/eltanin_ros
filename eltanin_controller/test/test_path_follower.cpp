@@ -19,6 +19,7 @@
 #include <rclcpp/parameter_map.hpp>
 #include <rclcpp/rclcpp.hpp>
 
+#include <eltanin_msgs/msg/directed_path.hpp>
 #include <eltanin_msgs/msg/follower_diagnostic.hpp>
 #include <eltanin_msgs/msg/trajectory2_d.hpp>
 #include <geometry_msgs/msg/point_stamped.hpp>
@@ -59,6 +60,7 @@ constexpr const char * BASE_FRAME = "test_base";
 /// Names of this test alone, so a planner test running beside it cannot feed the follower.
 constexpr const char * PATH_TOPIC = "/test_follower_path";
 constexpr const char * TRAJECTORY_TOPIC = "/test_follower_trajectory";
+constexpr const char * DIRECTED_PATH_TOPIC = "/test_follower_directed_path";
 
 nav_msgs::msg::Path make_path(
   const rclcpp::Time & stamp, const std::string & frame_id = MAP_FRAME, std::size_t poses = 41,
@@ -90,6 +92,33 @@ eltanin_msgs::msg::Trajectory2D make_trajectory(const rclcpp::Time & stamp)
   return msg;
 }
 
+/// Straight out and then straight back along the same line: one cusp, at pose `forward`.
+eltanin_msgs::msg::DirectedPath make_directed_path(
+  const rclcpp::Time & stamp, bool reversing, std::size_t forward = 20, std::size_t back = 10)
+{
+  eltanin_msgs::msg::DirectedPath msg;
+  msg.header.frame_id = MAP_FRAME;
+  msg.header.stamp = stamp;
+  const std::size_t total = reversing ? forward + back : forward;
+  for (std::size_t i = 0; i <= total; ++i) {
+    const double travelled =
+      i <= forward ? 0.05 * static_cast<double>(i) : 0.05 * static_cast<double>(2 * forward - i);
+    geometry_msgs::msg::Pose pose;
+    pose.position.x = travelled;
+    pose.orientation = eltanin_ros_common::to_quaternion(0.0);
+    msg.poses.push_back(pose);
+    if (i > 0) {
+      msg.segment_directions.push_back(
+        i <= forward ? eltanin_msgs::msg::DirectedPath::DIRECTION_FORWARD
+                     : eltanin_msgs::msg::DirectedPath::DIRECTION_REVERSE);
+    }
+  }
+  if (!reversing) {
+    msg.segment_directions.clear();
+  }
+  return msg;
+}
+
 std::vector<rclcpp::Parameter> shipped_configuration()
 {
   std::vector<rclcpp::Parameter> parameters;
@@ -117,6 +146,8 @@ protected:
     path_publisher_ = helper_->create_publisher<nav_msgs::msg::Path>(PATH_TOPIC, control_qos());
     trajectory_publisher_ =
       helper_->create_publisher<eltanin_msgs::msg::Trajectory2D>(TRAJECTORY_TOPIC, control_qos());
+    directed_path_publisher_ = helper_->create_publisher<eltanin_msgs::msg::DirectedPath>(
+      DIRECTED_PATH_TOPIC, control_qos());
     broadcaster_ = std::make_shared<tf2_ros::StaticTransformBroadcaster>(helper_);
     command_subscription_ = helper_->create_subscription<geometry_msgs::msg::TwistStamped>(
       "/test_path_follower/cmd_vel_raw", control_qos(),
@@ -168,7 +199,8 @@ protected:
     options.arguments(
       {"--ros-args", "-r", "__node:=test_path_follower", "-r",
        std::string("global_path_planner/global_path:=") + PATH_TOPIC, "-r",
-       std::string("local_path_planner/local_trajectory:=") + TRAJECTORY_TOPIC});
+       std::string("local_path_planner/local_trajectory:=") + TRAJECTORY_TOPIC, "-r",
+       std::string("global_path_planner/global_path_directed:=") + DIRECTED_PATH_TOPIC});
     node_ = std::make_shared<PathFollower>(options);
     executor_->add_node(node_);
   }
@@ -217,6 +249,18 @@ protected:
       return linked;
     }
     path_publisher_->publish(msg);
+    return ::testing::AssertionSuccess();
+  }
+
+  ::testing::AssertionResult publish_directed_path(const eltanin_msgs::msg::DirectedPath & msg)
+  {
+    const auto linked = wait_until("the directed path subscription to appear", [this]() {
+      return directed_path_publisher_->get_subscription_count() > 0;
+    });
+    if (!linked) {
+      return linked;
+    }
+    directed_path_publisher_->publish(msg);
     return ::testing::AssertionSuccess();
   }
 
@@ -306,6 +350,7 @@ protected:
   std::shared_ptr<PathFollower> node_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_publisher_;
   rclcpp::Publisher<eltanin_msgs::msg::Trajectory2D>::SharedPtr trajectory_publisher_;
+  rclcpp::Publisher<eltanin_msgs::msg::DirectedPath>::SharedPtr directed_path_publisher_;
   std::shared_ptr<tf2_ros::StaticTransformBroadcaster> broadcaster_;
   rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr command_subscription_;
   rclcpp::Subscription<Diagnostic>::SharedPtr diagnostic_subscription_;
@@ -473,6 +518,38 @@ TEST_F(PathFollowerFixture, AnAlignmentThatNeverFinishesIsReportedAsNotOk)
   EXPECT_FALSE(latest.ok);
   EXPECT_EQ(latest.reason, Diagnostic::REASON_CONTROLLER);
   EXPECT_DOUBLE_EQ(last_command().twist.angular.z, 0.0);
+}
+
+TEST_F(PathFollowerFixture, ADirectedPathIsFollowedLikeAnyOtherWhenItOnlyGoesForward)
+{
+  start({rclcpp::Parameter("path_source", "directed_path")});
+  broadcast_robot(0.0, 0.0, 0.0);
+  ASSERT_TRUE(wait_for_commands(2));
+  ASSERT_TRUE(publish_directed_path(make_directed_path(helper_->now(), false)));
+
+  ASSERT_TRUE(wait_until("a forward command", [this]() { return peak_linear() > 0.0; }));
+  const Diagnostic latest = last_diagnostic();
+  EXPECT_EQ(latest.status, Diagnostic::STATUS_TRACKING);
+  EXPECT_EQ(latest.travel_direction, Diagnostic::DIRECTION_FORWARD);
+  EXPECT_TRUE(latest.ok);
+}
+
+TEST_F(PathFollowerFixture, PurePursuitRefusesAReversingPathAndKeepsPublishingZero)
+{
+  start({rclcpp::Parameter("path_source", "directed_path")});
+  broadcast_robot(0.0, 0.0, 0.0);
+  ASSERT_TRUE(wait_for_commands(2));
+  ASSERT_TRUE(publish_directed_path(make_directed_path(helper_->now(), true)));
+
+  ASSERT_TRUE(wait_until("the follower to refuse the path", [this]() {
+    return last_diagnostic().status == Diagnostic::STATUS_PATH_NOT_SUPPORTED;
+  }));
+  clear();
+  ASSERT_TRUE(wait_for_commands(5));
+  EXPECT_TRUE(every_command_is_zero());
+  const Diagnostic latest = last_diagnostic();
+  EXPECT_EQ(latest.reason, Diagnostic::REASON_CONTROLLER);
+  EXPECT_FALSE(latest.ok);
 }
 
 TEST_F(PathFollowerFixture, AParameterOutsideItsRangeStopsTheNodeFromStarting)

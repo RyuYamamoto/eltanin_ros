@@ -19,6 +19,7 @@
 
 #include <eltanin/collision/collision_checker.hpp>
 #include <eltanin/planner/path_smoother.hpp>
+#include <eltanin_ros_common/directed_path_conversion.hpp>
 #include <eltanin_ros_common/geometry_conversion.hpp>
 #include <eltanin_ros_common/map_conversion.hpp>
 #include <eltanin_ros_common/marker_conversion.hpp>
@@ -256,6 +257,8 @@ GlobalPathPlanner::GlobalPathPlanner(const rclcpp::NodeOptions & options)
   action_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
   path_publisher_ = create_publisher<nav_msgs::msg::Path>("~/global_path", path_qos());
+  directed_path_publisher_ =
+    create_publisher<eltanin_msgs::msg::DirectedPath>("~/global_path_directed", path_qos());
   if (parameters_.publish_raw_path) {
     raw_path_publisher_ = create_publisher<nav_msgs::msg::Path>("~/global_path_raw", path_qos());
   }
@@ -556,6 +559,14 @@ void GlobalPathPlanner::execute(const std::shared_ptr<GoalHandle> & handle)
 
   // Published before succeed() so the topic already carries the path the result announces (P-6).
   path_publisher_->publish(path_msg.value());
+
+  const eltanin_ros_common::ConversionResult<eltanin_msgs::msg::DirectedPath> directed_msg =
+    eltanin_ros_common::to_directed_path_msg(smoothed, map_frame, stamp);
+  if (directed_msg.ok()) {
+    directed_path_publisher_->publish(directed_msg.value());
+  } else {
+    RCLCPP_WARN(get_logger(), "%s", directed_msg.error().c_str());
+  }
 
   if (footprint_publisher_) {
     const eltanin_ros_common::ConversionResult<visualization_msgs::msg::MarkerArray> markers =

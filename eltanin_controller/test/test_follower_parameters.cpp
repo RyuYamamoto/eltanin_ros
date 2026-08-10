@@ -52,14 +52,16 @@ FollowerParameters make_parameters()
   return parameters;
 }
 
-TEST(PathSourceTest, TheTwoNamesRoundTripAndNothingElseIsAccepted)
+TEST(PathSourceTest, EveryNameRoundTripsAndNothingElseIsAccepted)
 {
   EXPECT_EQ(to_path_source("path"), PathSource::Path);
   EXPECT_EQ(to_path_source("trajectory"), PathSource::Trajectory);
+  EXPECT_EQ(to_path_source("directed_path"), PathSource::DirectedPath);
   EXPECT_FALSE(to_path_source("bogus").has_value());
   EXPECT_FALSE(to_path_source("").has_value());
   EXPECT_STREQ(name_of(PathSource::Path), "path");
   EXPECT_STREQ(name_of(PathSource::Trajectory), "trajectory");
+  EXPECT_STREQ(name_of(PathSource::DirectedPath), "directed_path");
 }
 
 TEST(ValidateTest, TheDefaultsAreUsable)
@@ -159,8 +161,9 @@ TEST(VelocityLimitsTest, TheAngularLimitReachesBothGenerators)
   limits.max_linear_vel = 1.0;
   limits.max_angular_vel = 1.57;
 
-  const auto clamp = apply_velocity_limits(parameters, limits);
-  EXPECT_FALSE(clamp.clamped);
+  const auto clamps = apply_velocity_limits(parameters, limits);
+  EXPECT_FALSE(clamps[0].clamped);
+  EXPECT_FALSE(clamps[1].clamped);
   EXPECT_DOUBLE_EQ(parameters.follower.pure_pursuit.max_angular_vel, 1.57);
   EXPECT_DOUBLE_EQ(parameters.approach.max_angular_vel, 1.57);
   EXPECT_DOUBLE_EQ(parameters.follower.pure_pursuit.desired_linear_vel, 0.5);
@@ -174,12 +177,83 @@ TEST(VelocityLimitsTest, ACruiseSpeedAboveTheBodyLimitIsClampedRatherThanRefused
   limits.max_linear_vel = 0.30;
   limits.max_angular_vel = 1.57;
 
-  const auto clamp = apply_velocity_limits(parameters, limits);
-  EXPECT_TRUE(clamp.clamped);
-  EXPECT_DOUBLE_EQ(clamp.requested, 0.5);
-  EXPECT_DOUBLE_EQ(clamp.applied, 0.30);
+  const auto clamps = apply_velocity_limits(parameters, limits);
+  EXPECT_TRUE(clamps[0].clamped);
+  EXPECT_DOUBLE_EQ(clamps[0].requested, 0.5);
+  EXPECT_DOUBLE_EQ(clamps[0].applied, 0.30);
   EXPECT_DOUBLE_EQ(parameters.follower.pure_pursuit.desired_linear_vel, 0.30);
   EXPECT_TRUE(validate(parameters).ok());
 }
+
+#ifdef ELTANIN_WITH_MPC
+
+TEST(VelocityLimitsTest, ANegativeReverseFloorSurvivesTheBodyLimit)
+{
+  FollowerParameters parameters = make_parameters();
+  parameters.follower.type = eltanin::control::FollowerType::Mpc;
+  parameters.follower.mpc.max_linear_vel = 0.15;
+  parameters.follower.mpc.min_linear_vel = -0.05;
+  eltanin_ros_common::VelocityLimits limits;
+  limits.max_linear_vel = 0.30;
+  limits.max_angular_vel = 1.57;
+
+  const auto clamps = apply_velocity_limits(parameters, limits);
+  EXPECT_FALSE(clamps[0].clamped);
+  EXPECT_FALSE(clamps[1].clamped);
+  EXPECT_DOUBLE_EQ(parameters.follower.mpc.min_linear_vel, -0.05);
+  EXPECT_TRUE(validate(parameters).ok());
+}
+
+TEST(VelocityLimitsTest, AReverseFloorBelowTheBodyLimitIsClampedRatherThanRefused)
+{
+  FollowerParameters parameters = make_parameters();
+  parameters.follower.type = eltanin::control::FollowerType::Mpc;
+  parameters.follower.mpc.max_linear_vel = 0.5;
+  parameters.follower.mpc.min_linear_vel = -0.5;
+  eltanin_ros_common::VelocityLimits limits;
+  limits.max_linear_vel = 0.30;
+  limits.max_angular_vel = 1.57;
+
+  const auto clamps = apply_velocity_limits(parameters, limits);
+  EXPECT_TRUE(clamps[0].clamped);
+  EXPECT_DOUBLE_EQ(clamps[0].applied, 0.30);
+  EXPECT_TRUE(clamps[1].clamped);
+  EXPECT_DOUBLE_EQ(clamps[1].requested, -0.5);
+  EXPECT_DOUBLE_EQ(clamps[1].applied, -0.30);
+  EXPECT_DOUBLE_EQ(parameters.follower.mpc.min_linear_vel, -0.30);
+  EXPECT_TRUE(validate(parameters).ok());
+  EXPECT_TRUE(eltanin::control::MpcFollower::create(parameters.follower.mpc).has_value());
+}
+
+TEST(ValidateTest, AReverseFloorBelowMinusMaxIsRefused)
+{
+  FollowerParameters parameters = make_parameters();
+  parameters.follower.type = eltanin::control::FollowerType::Mpc;
+  parameters.follower.mpc.max_linear_vel = 0.3;
+  parameters.follower.mpc.min_linear_vel = -0.3 - 1e-6;
+  EXPECT_TRUE(names(validate(parameters).message(), "mpc.min_linear_vel"));
+  EXPECT_FALSE(eltanin::control::MpcFollower::create(parameters.follower.mpc).has_value());
+}
+
+TEST(ValidateTest, ANegativeReverseFloorReachesEltaninIntact)
+{
+  FollowerParameters parameters = make_parameters();
+  parameters.follower.type = eltanin::control::FollowerType::Mpc;
+  parameters.follower.mpc.max_linear_vel = 0.15;
+  parameters.follower.mpc.min_linear_vel = -0.05;
+  EXPECT_TRUE(validate(parameters).ok());
+  const auto follower = eltanin::control::MpcFollower::create(parameters.follower.mpc);
+  ASSERT_TRUE(follower.has_value());
+  EXPECT_DOUBLE_EQ(follower->params().min_linear_vel, -0.05);
+}
+
+#else
+
+TEST(MpcAvailabilityTest, ABuildWithoutMpcSaysSoRatherThanPretending)
+{
+  EXPECT_FALSE(eltanin_controller::mpc_is_available());
+}
+
+#endif
 
 }  // namespace

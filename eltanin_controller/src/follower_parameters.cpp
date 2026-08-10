@@ -140,6 +140,13 @@ ConversionStatus validate_mpc(const eltanin::control::MpcFollowerParams & mpc)
                                 std::string(KEY_MPC_MAX_LINEAR_VEL) + " " +
                                 std::to_string(mpc.max_linear_vel)));
   }
+  // A negative value is what allows reversing; max_linear_vel bounds the magnitude either way.
+  if (mpc.min_linear_vel < -mpc.max_linear_vel) {
+    return ConversionStatus::failure(diagnostic::rejected(
+      KEY_MPC_MIN_LINEAR_VEL, "is " + std::to_string(mpc.min_linear_vel) + ", below minus " +
+                                std::string(KEY_MPC_MAX_LINEAR_VEL) + " " +
+                                std::to_string(mpc.max_linear_vel)));
+  }
   const ConversionStatus angular = require_positive(ANGULAR_LIMIT, mpc.max_angular_vel);
   if (!angular.ok()) {
     return angular;
@@ -286,7 +293,15 @@ ConversionStatus validate_follower(const eltanin::control::FollowerFactoryParams
 
 const char * name_of(PathSource source) noexcept
 {
-  return source == PathSource::Trajectory ? "trajectory" : "path";
+  switch (source) {
+    case PathSource::Trajectory:
+      return "trajectory";
+    case PathSource::DirectedPath:
+      return "directed_path";
+    case PathSource::Path:
+      break;
+  }
+  return "path";
 }
 
 std::optional<PathSource> to_path_source(std::string_view name) noexcept
@@ -296,6 +311,9 @@ std::optional<PathSource> to_path_source(std::string_view name) noexcept
   }
   if (name == "trajectory") {
     return PathSource::Trajectory;
+  }
+  if (name == "directed_path") {
+    return PathSource::DirectedPath;
   }
   return std::nullopt;
 }
@@ -309,7 +327,7 @@ bool mpc_is_available() noexcept
 #endif
 }
 
-VelocityClamp apply_velocity_limits(
+VelocityClamps apply_velocity_limits(
   FollowerParameters & parameters, const eltanin_ros_common::VelocityLimits & limits)
 {
   parameters.approach.max_angular_vel = limits.max_angular_vel;
@@ -319,23 +337,38 @@ VelocityClamp apply_velocity_limits(
 #endif
 
   double * speed = &parameters.follower.pure_pursuit.desired_linear_vel;
-  VelocityClamp clamp;
-  clamp.key = KEY_DESIRED_LINEAR_VEL;
+  VelocityClamps clamps;
+  clamps[0].key = KEY_DESIRED_LINEAR_VEL;
 #ifdef ELTANIN_WITH_MPC
   if (parameters.follower.type == FollowerType::Mpc) {
     speed = &parameters.follower.mpc.max_linear_vel;
-    clamp.key = KEY_MPC_MAX_LINEAR_VEL;
+    clamps[0].key = KEY_MPC_MAX_LINEAR_VEL;
   }
 #endif
 
-  clamp.requested = *speed;
-  clamp.applied = clamp.requested;
-  if (std::isfinite(clamp.requested) && clamp.requested > limits.max_linear_vel) {
-    clamp.clamped = true;
-    clamp.applied = limits.max_linear_vel;
+  clamps[0].requested = *speed;
+  clamps[0].applied = clamps[0].requested;
+  if (std::isfinite(clamps[0].requested) && clamps[0].requested > limits.max_linear_vel) {
+    clamps[0].clamped = true;
+    clamps[0].applied = limits.max_linear_vel;
     *speed = limits.max_linear_vel;
   }
-  return clamp;
+
+#ifdef ELTANIN_WITH_MPC
+  // robot.max_linear_vel is a magnitude, so it bounds the reverse floor from below just as hard.
+  if (parameters.follower.type == FollowerType::Mpc) {
+    double & floor = parameters.follower.mpc.min_linear_vel;
+    clamps[1].key = KEY_MPC_MIN_LINEAR_VEL;
+    clamps[1].requested = floor;
+    clamps[1].applied = floor;
+    if (std::isfinite(floor) && floor < -limits.max_linear_vel) {
+      clamps[1].clamped = true;
+      clamps[1].applied = -limits.max_linear_vel;
+      floor = -limits.max_linear_vel;
+    }
+  }
+#endif
+  return clamps;
 }
 
 ConversionStatus validate(const FollowerParameters & parameters)

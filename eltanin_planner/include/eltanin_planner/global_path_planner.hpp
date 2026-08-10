@@ -27,6 +27,7 @@
 #include <eltanin_msgs/action/compute_path_to_pose.hpp>
 #include <eltanin_msgs/msg/costmap.hpp>
 #include <eltanin_msgs/msg/costmap_update.hpp>
+#include <eltanin_msgs/msg/directed_path.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
@@ -117,6 +118,8 @@ private:
   rclcpp::CallbackGroup::SharedPtr action_group_;
   rclcpp_action::Server<Action>::SharedPtr action_server_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_publisher_;
+  /// The same path with the direction each segment is driven in; nav_msgs/Path cannot carry it.
+  rclcpp::Publisher<eltanin_msgs::msg::DirectedPath>::SharedPtr directed_path_publisher_;
   /// Only created when publish_raw_path is set; a topic nobody publishes is not created.
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr raw_path_publisher_;
   /// Same rule, for publish_footprint_path: the footprint laid along the path that was published.
