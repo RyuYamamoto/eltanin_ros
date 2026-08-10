@@ -59,10 +59,10 @@ global_path_planner:
       # and circles the goal instead. false folds the heading into the last moving pose.
       emit_goal_rotation: false
       # The body can drive backwards. The analytic tail follows from it: a Dubins path without
-      # reverse, a Reeds-Shepp one with it. The mpc follower can execute the result over
-      # ~/global_path_directed; pure_pursuit refuses it. Left false until the effect on ordinary
-      # forward plans has been measured.
-      allow_reverse: false
+      # reverse, a Reeds-Shepp one with it. Executing the result needs a follower that can: the
+      # mpc one over ~/global_path_directed with a negative mpc.min_linear_vel. pure_pursuit
+      # refuses such a path outright and publishes zero, which is a stopped robot, not a crash.
+      allow_reverse: true
       # The body can rotate without translating, as a differential drive does. The path then
       # contains consecutive poses that share a position, which the follower has to execute too.
       allow_turn_in_place: true
