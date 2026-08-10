@@ -14,7 +14,7 @@
 
 #include "eltanin_controller/command_composition.hpp"
 
-#include <eltanin_msgs/msg/follower_diagnostic.hpp>
+#include <diagnostic_msgs/msg/diagnostic_status.hpp>
 
 #include <gtest/gtest.h>
 
@@ -22,20 +22,23 @@
 #include <limits>
 #include <optional>
 #include <set>
+#include <string>
 #include <vector>
 
 namespace
 {
 
 using Approach = eltanin::control::GoalApproach;
-using Diagnostic = eltanin_msgs::msg::FollowerDiagnostic;
+using Status = diagnostic_msgs::msg::DiagnosticStatus;
 using Pursuit = eltanin::control::PurePursuit;
 using eltanin::control::FollowResult;
 using eltanin::control::FollowStatus;
 using eltanin_controller::composition::compose;
+using eltanin_controller::composition::FollowerReason;
 using eltanin_controller::composition::input_failure;
+using eltanin_controller::composition::level_of;
+using eltanin_controller::composition::name_of;
 using eltanin_controller::composition::Outcome;
-using eltanin_controller::composition::to_wire;
 using eltanin_controller::composition::tracking_required;
 
 constexpr double INFINITE = std::numeric_limits<double>::infinity();
@@ -93,9 +96,9 @@ TEST(ComposeTest, AligningIgnoresWhateverPurePursuitWouldHaveSaid)
   EXPECT_EQ(with.command.angular, approach.command.angular);
   EXPECT_EQ(with.command.linear.x(), 0.0);
   EXPECT_FALSE(with.has_lookahead);
-  EXPECT_EQ(with.status, Diagnostic::STATUS_NO_PATH);
-  EXPECT_EQ(with.approach_state, Diagnostic::APPROACH_ALIGNING);
-  EXPECT_EQ(with.reason, Diagnostic::REASON_NONE);
+  EXPECT_EQ(with.status, FollowStatus::NoPath);
+  EXPECT_EQ(with.approach_state, Approach::State::Aligning);
+  EXPECT_EQ(with.reason, FollowerReason::None);
   EXPECT_TRUE(with.ok);
 }
 
@@ -104,8 +107,8 @@ TEST(ComposeTest, ReachedIsAZeroCommandAndNotAFailure)
   const Outcome outcome =
     compose(make_approach(Approach::State::Reached, 0.0), std::nullopt, std::nullopt);
   expect_zero_command(outcome);
-  EXPECT_EQ(outcome.approach_state, Diagnostic::APPROACH_REACHED);
-  EXPECT_EQ(outcome.reason, Diagnostic::REASON_CONTROLLER);
+  EXPECT_EQ(outcome.approach_state, Approach::State::Reached);
+  EXPECT_EQ(outcome.reason, FollowerReason::Controller);
   EXPECT_TRUE(outcome.ok);
 }
 
@@ -114,8 +117,8 @@ TEST(ComposeTest, AlignmentTimeoutIsAZeroCommandAndAFailure)
   const Outcome outcome =
     compose(make_approach(Approach::State::AlignmentTimeout, 0.0), std::nullopt, std::nullopt);
   expect_zero_command(outcome);
-  EXPECT_EQ(outcome.approach_state, Diagnostic::APPROACH_ALIGNMENT_TIMEOUT);
-  EXPECT_EQ(outcome.reason, Diagnostic::REASON_CONTROLLER);
+  EXPECT_EQ(outcome.approach_state, Approach::State::AlignmentTimeout);
+  EXPECT_EQ(outcome.reason, FollowerReason::Controller);
   EXPECT_FALSE(outcome.ok);
 }
 
@@ -127,9 +130,9 @@ TEST(ComposeTest, AnUnlimitedApproachLeavesTheTrackingCommandUntouched)
 
   EXPECT_EQ(outcome.command.linear.x(), tracking.command.linear.x());
   EXPECT_EQ(outcome.command.angular, tracking.command.angular);
-  EXPECT_EQ(outcome.status, Diagnostic::STATUS_TRACKING);
-  EXPECT_EQ(outcome.approach_state, Diagnostic::APPROACH_INACTIVE);
-  EXPECT_EQ(outcome.reason, Diagnostic::REASON_NONE);
+  EXPECT_EQ(outcome.status, FollowStatus::Tracking);
+  EXPECT_EQ(outcome.approach_state, Approach::State::Inactive);
+  EXPECT_EQ(outcome.reason, FollowerReason::None);
   EXPECT_TRUE(outcome.ok);
   EXPECT_TRUE(outcome.has_lookahead);
   EXPECT_EQ(outcome.lookahead_index, make_lookahead().target_index);
@@ -148,7 +151,7 @@ TEST(ComposeTest, TheApproachLimitScalesTheWholeCommandAndKeepsTheCurvature)
   EXPECT_DOUBLE_EQ(
     outcome.command.angular / outcome.command.linear.x(),
     tracking.command.angular / tracking.command.linear.x());
-  EXPECT_EQ(outcome.approach_state, Diagnostic::APPROACH_APPROACHING);
+  EXPECT_EQ(outcome.approach_state, Approach::State::Approaching);
 }
 
 TEST(ComposeTest, GoalReachedBeforeTheApproachAcceptedItIsAFailure)
@@ -157,8 +160,8 @@ TEST(ComposeTest, GoalReachedBeforeTheApproachAcceptedItIsAFailure)
     make_approach(Approach::State::Approaching, 0.4), make_tracking(FollowStatus::GoalReached),
     std::nullopt);
   expect_zero_command(outcome);
-  EXPECT_EQ(outcome.status, Diagnostic::STATUS_GOAL_REACHED);
-  EXPECT_EQ(outcome.reason, Diagnostic::REASON_CONTROLLER);
+  EXPECT_EQ(outcome.status, FollowStatus::GoalReached);
+  EXPECT_EQ(outcome.reason, FollowerReason::Controller);
   EXPECT_FALSE(outcome.ok);
 }
 
@@ -167,8 +170,8 @@ TEST(ComposeTest, NoPathIsAFailureEvenThoughTheNodeFiltersEmptyPathsFirst)
   const Outcome outcome = compose(
     make_approach(Approach::State::Inactive), make_tracking(FollowStatus::NoPath), std::nullopt);
   expect_zero_command(outcome);
-  EXPECT_EQ(outcome.status, Diagnostic::STATUS_NO_PATH);
-  EXPECT_EQ(outcome.reason, Diagnostic::REASON_CONTROLLER);
+  EXPECT_EQ(outcome.status, FollowStatus::NoPath);
+  EXPECT_EQ(outcome.reason, FollowerReason::Controller);
   EXPECT_FALSE(outcome.ok);
 }
 
@@ -178,7 +181,7 @@ TEST(ComposeTest, AMissingTrackingResultDegradesToTheSafeSide)
   const Outcome outcome =
     compose(make_approach(Approach::State::Inactive), std::nullopt, std::nullopt);
   expect_zero_command(outcome);
-  EXPECT_EQ(outcome.reason, Diagnostic::REASON_CONTROLLER);
+  EXPECT_EQ(outcome.reason, FollowerReason::Controller);
   EXPECT_FALSE(outcome.ok);
 }
 #endif
@@ -193,8 +196,8 @@ TEST(ComposeTest, ASolverFailureKeepsTheDecelerationEltaninReturnedWithIt)
 
   EXPECT_DOUBLE_EQ(outcome.command.linear.x(), 0.2);
   EXPECT_DOUBLE_EQ(outcome.command.angular, 0.1);
-  EXPECT_EQ(outcome.status, Diagnostic::STATUS_SOLVER_FAILED);
-  EXPECT_EQ(outcome.reason, Diagnostic::REASON_CONTROLLER);
+  EXPECT_EQ(outcome.status, FollowStatus::SolverFailed);
+  EXPECT_EQ(outcome.reason, FollowerReason::Controller);
   EXPECT_FALSE(outcome.ok);
   EXPECT_FALSE(outcome.has_lookahead);
 }
@@ -214,63 +217,80 @@ TEST(ComposeTest, AFollowerWithoutALookaheadTracksWithoutPublishingAPoint)
   const Outcome outcome = compose(
     make_approach(Approach::State::Inactive, INFINITE), make_tracking(FollowStatus::Tracking),
     std::nullopt);
-  EXPECT_EQ(outcome.status, Diagnostic::STATUS_TRACKING);
+  EXPECT_EQ(outcome.status, FollowStatus::Tracking);
   EXPECT_TRUE(outcome.ok);
   EXPECT_FALSE(outcome.has_lookahead);
 }
 
 TEST(InputFailureTest, EveryInputSideReasonIsAZeroCommandThatIsStillOk)
 {
-  const std::vector<std::uint8_t> reasons{
-    Diagnostic::REASON_NO_INPUT,     Diagnostic::REASON_INPUT_STALE,
-    Diagnostic::REASON_INPUT_EMPTY,  Diagnostic::REASON_INPUT_REJECTED,
-    Diagnostic::REASON_NO_TRANSFORM, Diagnostic::REASON_NO_DT};
-  for (const std::uint8_t reason : reasons) {
+  const std::vector<FollowerReason> reasons{
+    FollowerReason::NoInput,       FollowerReason::InputStale,  FollowerReason::InputEmpty,
+    FollowerReason::InputRejected, FollowerReason::NoTransform, FollowerReason::NoDt};
+  for (const FollowerReason reason : reasons) {
     const Outcome outcome = input_failure(reason);
     expect_zero_command(outcome);
     EXPECT_EQ(outcome.reason, reason);
-    EXPECT_EQ(outcome.status, Diagnostic::STATUS_NO_PATH);
-    EXPECT_EQ(outcome.approach_state, Diagnostic::APPROACH_INACTIVE);
-    EXPECT_TRUE(outcome.ok) << "reason " << static_cast<int>(reason);
+    EXPECT_EQ(outcome.status, FollowStatus::NoPath);
+    EXPECT_EQ(outcome.approach_state, Approach::State::Inactive);
+    EXPECT_TRUE(outcome.ok) << "reason " << name_of(reason);
   }
 }
 
-TEST(WireConstantsTest, TheFollowStatusFollowsItsDeclarationOrder)
+TEST(ReasonNameTest, TheEightReasonsHaveDistinctNames)
 {
-  EXPECT_EQ(to_wire(FollowStatus::NoPath), Diagnostic::STATUS_NO_PATH);
-  EXPECT_EQ(to_wire(FollowStatus::Tracking), Diagnostic::STATUS_TRACKING);
-  EXPECT_EQ(to_wire(FollowStatus::GoalReached), Diagnostic::STATUS_GOAL_REACHED);
-  EXPECT_EQ(to_wire(FollowStatus::SolverFailed), Diagnostic::STATUS_SOLVER_FAILED);
-  EXPECT_EQ(Diagnostic::STATUS_NO_PATH, 0);
-  EXPECT_EQ(Diagnostic::STATUS_TRACKING, 1);
-  EXPECT_EQ(Diagnostic::STATUS_GOAL_REACHED, 2);
-  EXPECT_EQ(Diagnostic::STATUS_SOLVER_FAILED, 3);
+  const std::vector<FollowerReason> reasons{
+    FollowerReason::None,       FollowerReason::NoInput,       FollowerReason::InputStale,
+    FollowerReason::InputEmpty, FollowerReason::InputRejected, FollowerReason::NoTransform,
+    FollowerReason::NoDt,       FollowerReason::Controller};
+  std::set<std::string> names;
+  for (const FollowerReason reason : reasons) {
+    names.insert(name_of(reason));
+  }
+  EXPECT_EQ(names.size(), reasons.size());
+  EXPECT_STREQ(name_of(FollowerReason::None), "none");
 }
 
-TEST(WireConstantsTest, TheApproachStateFollowsItsDeclarationOrder)
+TEST(ReasonNameTest, TheApproachStatesAndDirectionsHaveDistinctNames)
 {
-  EXPECT_EQ(to_wire(Approach::State::Inactive), Diagnostic::APPROACH_INACTIVE);
-  EXPECT_EQ(to_wire(Approach::State::Approaching), Diagnostic::APPROACH_APPROACHING);
-  EXPECT_EQ(to_wire(Approach::State::Aligning), Diagnostic::APPROACH_ALIGNING);
-  EXPECT_EQ(to_wire(Approach::State::Reached), Diagnostic::APPROACH_REACHED);
-  EXPECT_EQ(to_wire(Approach::State::AlignmentTimeout), Diagnostic::APPROACH_ALIGNMENT_TIMEOUT);
-  EXPECT_EQ(Diagnostic::APPROACH_INACTIVE, 0);
-  EXPECT_EQ(Diagnostic::APPROACH_APPROACHING, 1);
-  EXPECT_EQ(Diagnostic::APPROACH_ALIGNING, 2);
-  EXPECT_EQ(Diagnostic::APPROACH_REACHED, 3);
-  EXPECT_EQ(Diagnostic::APPROACH_ALIGNMENT_TIMEOUT, 4);
+  std::set<std::string> states;
+  for (const Approach::State state :
+       {Approach::State::Inactive, Approach::State::Approaching, Approach::State::Aligning,
+        Approach::State::Reached, Approach::State::AlignmentTimeout}) {
+    states.insert(name_of(state));
+  }
+  EXPECT_EQ(states.size(), 5u);
+  EXPECT_STREQ(name_of(Approach::State::AlignmentTimeout), "alignment_timeout");
+
+  EXPECT_STREQ(name_of(eltanin::Direction::Forward), "forward");
+  EXPECT_STREQ(name_of(eltanin::Direction::Reverse), "reverse");
+  EXPECT_STREQ(name_of(eltanin::Direction::InPlace), "in_place");
 }
 
-TEST(WireConstantsTest, TheEightReasonsAreDistinctAndNoneIsZeroTwice)
+TEST(LevelTest, ErrorIsExactlyTheCyclesThatAreNotOk)
 {
-  const std::vector<std::uint8_t> reasons{
-    Diagnostic::REASON_NONE,           Diagnostic::REASON_NO_INPUT,
-    Diagnostic::REASON_INPUT_STALE,    Diagnostic::REASON_INPUT_EMPTY,
-    Diagnostic::REASON_INPUT_REJECTED, Diagnostic::REASON_NO_TRANSFORM,
-    Diagnostic::REASON_NO_DT,          Diagnostic::REASON_CONTROLLER};
-  const std::set<std::uint8_t> distinct(reasons.begin(), reasons.end());
-  EXPECT_EQ(distinct.size(), reasons.size());
-  EXPECT_EQ(Diagnostic::REASON_NONE, 0);
+  Outcome tracking;
+  tracking.reason = FollowerReason::None;
+  EXPECT_EQ(level_of(tracking), Status::OK);
+
+  for (const FollowerReason reason : {FollowerReason::NoInput, FollowerReason::InputStale}) {
+    EXPECT_EQ(level_of(input_failure(reason)), Status::STALE);
+  }
+  for (const FollowerReason reason :
+       {FollowerReason::InputEmpty, FollowerReason::InputRejected, FollowerReason::NoTransform,
+        FollowerReason::NoDt}) {
+    EXPECT_EQ(level_of(input_failure(reason)), Status::WARN);
+  }
+
+  Outcome reached;
+  reached.reason = FollowerReason::Controller;
+  reached.ok = true;
+  EXPECT_EQ(level_of(reached), Status::WARN);
+
+  Outcome failed;
+  failed.reason = FollowerReason::Controller;
+  failed.ok = false;
+  EXPECT_EQ(level_of(failed), Status::ERROR);
 }
 
 }  // namespace

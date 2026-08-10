@@ -28,8 +28,8 @@
 #include <eltanin_ros_common/warn_once.hpp>
 #include <rclcpp/rclcpp.hpp>
 
+#include <diagnostic_msgs/msg/diagnostic_array.hpp>
 #include <eltanin_msgs/msg/directed_path.hpp>
-#include <eltanin_msgs/msg/follower_diagnostic.hpp>
 #include <eltanin_msgs/msg/trajectory2_d.hpp>
 #include <geometry_msgs/msg/point_stamped.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
@@ -72,7 +72,7 @@ private:
     std::size_t run_index{0};
     std::size_t cusp_index{0};
     bool has_cusp{false};
-    /// Built only when the reason is not REASON_NONE, so a tracking cycle allocates no string.
+    /// Built only when the reason is not None, so a tracking cycle allocates no string.
     std::string message;
   };
 
@@ -132,7 +132,7 @@ private:
   rclcpp::Subscription<eltanin_msgs::msg::Trajectory2D>::SharedPtr trajectory_subscription_;
   rclcpp::Subscription<eltanin_msgs::msg::DirectedPath>::SharedPtr directed_path_subscription_;
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr command_publisher_;
-  rclcpp::Publisher<eltanin_msgs::msg::FollowerDiagnostic>::SharedPtr diagnostic_publisher_;
+  rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diagnostic_publisher_;
   rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr lookahead_publisher_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr reset_service_;
 

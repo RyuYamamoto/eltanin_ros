@@ -14,7 +14,7 @@
 
 #include "eltanin_controller/command_composition.hpp"
 
-#include <eltanin_msgs/msg/follower_diagnostic.hpp>
+#include <diagnostic_msgs/msg/diagnostic_status.hpp>
 
 #include <cassert>
 
@@ -24,7 +24,7 @@ namespace eltanin_controller::composition
 namespace
 {
 
-using Diagnostic = eltanin_msgs::msg::FollowerDiagnostic;
+using Status = diagnostic_msgs::msg::DiagnosticStatus;
 using Approach = eltanin::control::GoalApproach;
 using Pursuit = eltanin::control::PurePursuit;
 using eltanin::control::FollowStatus;
@@ -33,9 +33,9 @@ using eltanin::control::FollowStatus;
 Outcome controller_failure(const Approach::Result & approach, FollowStatus status, bool ok)
 {
   Outcome outcome;
-  outcome.status = to_wire(status);
-  outcome.approach_state = to_wire(approach.state);
-  outcome.reason = Diagnostic::REASON_CONTROLLER;
+  outcome.status = status;
+  outcome.approach_state = approach.state;
+  outcome.reason = FollowerReason::Controller;
   outcome.ok = ok;
   return outcome;
 }
@@ -54,48 +54,36 @@ bool tracking_required(Approach::State state) noexcept
   return state == Approach::State::Inactive || state == Approach::State::Approaching;
 }
 
-std::uint8_t to_wire(FollowStatus status) noexcept
+Outcome input_failure(FollowerReason reason) noexcept
 {
-  switch (status) {
-    case FollowStatus::NoPath:
-      return Diagnostic::STATUS_NO_PATH;
-    case FollowStatus::Tracking:
-      return Diagnostic::STATUS_TRACKING;
-    case FollowStatus::GoalReached:
-      return Diagnostic::STATUS_GOAL_REACHED;
-    case FollowStatus::SolverFailed:
-      return Diagnostic::STATUS_SOLVER_FAILED;
-    case FollowStatus::PathNotSupported:
-      return Diagnostic::STATUS_PATH_NOT_SUPPORTED;
-  }
-  return Diagnostic::STATUS_NO_PATH;
-}
-
-std::uint8_t to_wire(Approach::State state) noexcept
-{
-  switch (state) {
-    case Approach::State::Inactive:
-      return Diagnostic::APPROACH_INACTIVE;
-    case Approach::State::Approaching:
-      return Diagnostic::APPROACH_APPROACHING;
-    case Approach::State::Aligning:
-      return Diagnostic::APPROACH_ALIGNING;
-    case Approach::State::Reached:
-      return Diagnostic::APPROACH_REACHED;
-    case Approach::State::AlignmentTimeout:
-      return Diagnostic::APPROACH_ALIGNMENT_TIMEOUT;
-  }
-  return Diagnostic::APPROACH_INACTIVE;
-}
-
-Outcome input_failure(std::uint8_t reason) noexcept
-{
-  assert(reason != Diagnostic::REASON_NONE && reason != Diagnostic::REASON_CONTROLLER);
+  assert(reason != FollowerReason::None && reason != FollowerReason::Controller);
   Outcome outcome;
-  outcome.status = Diagnostic::STATUS_NO_PATH;
-  outcome.approach_state = Diagnostic::APPROACH_INACTIVE;
+  outcome.status = FollowStatus::NoPath;
+  outcome.approach_state = Approach::State::Inactive;
   outcome.reason = reason;
   return outcome;
+}
+
+std::uint8_t level_of(const Outcome & outcome) noexcept
+{
+  // ERROR exactly when ok is false, so the successor of FollowerDiagnostic::ok is level >= ERROR.
+  if (!outcome.ok) {
+    return Status::ERROR;
+  }
+  switch (outcome.reason) {
+    case FollowerReason::None:
+      return Status::OK;
+    case FollowerReason::NoInput:
+    case FollowerReason::InputStale:
+      return Status::STALE;
+    case FollowerReason::InputEmpty:
+    case FollowerReason::InputRejected:
+    case FollowerReason::NoTransform:
+    case FollowerReason::NoDt:
+    case FollowerReason::Controller:
+      return Status::WARN;
+  }
+  return Status::WARN;
 }
 
 Outcome compose(
@@ -111,9 +99,9 @@ Outcome compose(
   if (approach.state == Approach::State::Aligning) {
     Outcome outcome;
     outcome.command = approach.command;
-    outcome.status = to_wire(FollowStatus::NoPath);
-    outcome.approach_state = to_wire(approach.state);
-    outcome.reason = Diagnostic::REASON_NONE;
+    outcome.status = FollowStatus::NoPath;
+    outcome.approach_state = approach.state;
+    outcome.reason = FollowerReason::None;
     return outcome;
   }
 
@@ -134,9 +122,9 @@ Outcome compose(
   Outcome outcome;
   outcome.command =
     eltanin::control::detail::apply_linear_limit(tracking->command, approach.linear_vel_limit);
-  outcome.status = to_wire(tracking->status);
-  outcome.approach_state = to_wire(approach.state);
-  outcome.reason = Diagnostic::REASON_NONE;
+  outcome.status = tracking->status;
+  outcome.approach_state = approach.state;
+  outcome.reason = FollowerReason::None;
   // A follower without a lookahead, such as the MPC, simply publishes no point.
   outcome.has_lookahead = lookahead.has_value();
   if (lookahead.has_value()) {

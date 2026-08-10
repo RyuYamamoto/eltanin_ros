@@ -19,7 +19,6 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   msg/Trajectory2D.msg
   msg/DirectedPath.msg
   msg/NavigationState.msg
-  msg/FollowerDiagnostic.msg
   action/NavigateToPose.action
   action/ComputePathToPose.action
   DEPENDENCIES

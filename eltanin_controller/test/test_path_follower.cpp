@@ -19,8 +19,8 @@
 #include <rclcpp/parameter_map.hpp>
 #include <rclcpp/rclcpp.hpp>
 
+#include <diagnostic_msgs/msg/diagnostic_array.hpp>
 #include <eltanin_msgs/msg/directed_path.hpp>
-#include <eltanin_msgs/msg/follower_diagnostic.hpp>
 #include <eltanin_msgs/msg/trajectory2_d.hpp>
 #include <geometry_msgs/msg/point_stamped.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
@@ -42,7 +42,24 @@ namespace
 {
 
 using eltanin_controller::PathFollower;
-using Diagnostic = eltanin_msgs::msg::FollowerDiagnostic;
+using Diagnostic = diagnostic_msgs::msg::DiagnosticArray;
+using Status = diagnostic_msgs::msg::DiagnosticStatus;
+
+/// One cycle publishes exactly one status; an array that never arrived reads as a default one.
+Status status_of(const Diagnostic & msg)
+{
+  return msg.status.empty() ? Status{} : msg.status.front();
+}
+
+std::string value_of(const Diagnostic & msg, const std::string & key)
+{
+  for (const diagnostic_msgs::msg::KeyValue & pair : status_of(msg).values) {
+    if (pair.key == key) {
+      return pair.value;
+    }
+  }
+  return "";
+}
 
 /// Long enough that a loaded CI machine still gets there, short enough to fail rather than hang.
 constexpr std::chrono::seconds DEADLINE{10};
@@ -156,7 +173,7 @@ protected:
         commands_.push_back(*msg);
       });
     diagnostic_subscription_ = helper_->create_subscription<Diagnostic>(
-      "/test_path_follower/follower_state", control_qos(), [this](Diagnostic::ConstSharedPtr msg) {
+      "/test_path_follower/diagnostics", control_qos(), [this](Diagnostic::ConstSharedPtr msg) {
         const std::lock_guard<std::mutex> lock(mutex_);
         diagnostics_.push_back(*msg);
       });
@@ -276,20 +293,19 @@ protected:
     return ::testing::AssertionSuccess();
   }
 
-  ::testing::AssertionResult wait_for_reason(std::uint8_t reason)
+  ::testing::AssertionResult wait_for_reason(const std::string & reason)
   {
-    const auto reached =
-      wait_until("the reason becomes " + std::to_string(reason), [this, reason]() {
-        const Diagnostic latest = last_diagnostic();
-        return latest.header.stamp.sec != 0 && latest.reason == reason;
-      });
+    const auto reached = wait_until("the reason becomes " + reason, [this, &reason]() {
+      const Diagnostic latest = last_diagnostic();
+      return latest.header.stamp.sec != 0 && value_of(latest, "reason") == reason;
+    });
     if (reached) {
       return reached;
     }
     const Diagnostic latest = last_diagnostic();
     return ::testing::AssertionFailure()
-           << "the reason stayed " << static_cast<int>(latest.reason) << " ('" << latest.message
-           << "') instead of becoming " << static_cast<int>(reason);
+           << "the reason stayed '" << value_of(latest, "reason") << "' ('"
+           << status_of(latest).message << "') instead of becoming '" << reason << "'";
   }
 
   std::size_t command_count() const
@@ -370,14 +386,14 @@ TEST_F(PathFollowerFixture, WithoutAPathTheZeroCommandKeepsComing)
 {
   start();
   ASSERT_TRUE(wait_for_commands(5));
-  ASSERT_TRUE(wait_for_reason(Diagnostic::REASON_NO_INPUT));
+  ASSERT_TRUE(wait_for_reason("no_input"));
 
   EXPECT_TRUE(every_command_is_zero());
   const Diagnostic latest = last_diagnostic();
-  EXPECT_TRUE(latest.ok);
-  EXPECT_EQ(latest.status, Diagnostic::STATUS_NO_PATH);
-  EXPECT_FALSE(latest.message.empty());
-  EXPECT_EQ(latest.message.find('\n'), std::string::npos);
+  EXPECT_EQ(value_of(latest, "ok"), "true");
+  EXPECT_EQ(value_of(latest, "status"), "no path");
+  EXPECT_FALSE(status_of(latest).message.empty());
+  EXPECT_EQ(status_of(latest).message.find('\n'), std::string::npos);
 }
 
 TEST_F(PathFollowerFixture, TheFirstCycleHasNoElapsedTimeAndSaysSo)
@@ -385,13 +401,13 @@ TEST_F(PathFollowerFixture, TheFirstCycleHasNoElapsedTimeAndSaysSo)
   start();
   ASSERT_TRUE(wait_for_commands(1));
   ASSERT_TRUE(
-    wait_until("the first diagnostic", [this]() { return last_diagnostic().reason != 0; }));
+    wait_until("the first diagnostic", [this]() { return !last_diagnostic().status.empty(); }));
 
   const std::lock_guard<std::mutex> lock(mutex_);
   ASSERT_FALSE(diagnostics_.empty());
-  EXPECT_EQ(diagnostics_.front().reason, Diagnostic::REASON_NO_DT);
-  EXPECT_EQ(diagnostics_.front().control_dt, 0.0);
-  EXPECT_TRUE(diagnostics_.front().ok);
+  EXPECT_EQ(value_of(diagnostics_.front(), "reason"), "no_dt");
+  EXPECT_EQ(value_of(diagnostics_.front(), "control_dt"), "0");
+  EXPECT_EQ(value_of(diagnostics_.front(), "ok"), "true");
 }
 
 TEST_F(PathFollowerFixture, WithoutATransformTheZeroCommandKeepsComing)
@@ -399,12 +415,12 @@ TEST_F(PathFollowerFixture, WithoutATransformTheZeroCommandKeepsComing)
   start();
   ASSERT_TRUE(wait_for_commands(2));
   ASSERT_TRUE(publish_path(make_path(helper_->now())));
-  ASSERT_TRUE(wait_for_reason(Diagnostic::REASON_NO_TRANSFORM));
+  ASSERT_TRUE(wait_for_reason("no_transform"));
 
   clear();
   ASSERT_TRUE(wait_for_commands(5));
   EXPECT_TRUE(every_command_is_zero());
-  EXPECT_TRUE(last_diagnostic().ok);
+  EXPECT_EQ(value_of(last_diagnostic(), "ok"), "true");
 }
 
 TEST_F(PathFollowerFixture, APathAndATransformProduceAForwardCommandAndALookaheadPoint)
@@ -418,10 +434,10 @@ TEST_F(PathFollowerFixture, APathAndATransformProduceAForwardCommandAndALookahea
   ASSERT_TRUE(wait_until("a lookahead point", [this]() { return lookahead_count() > 0; }));
 
   const Diagnostic latest = last_diagnostic();
-  EXPECT_EQ(latest.reason, Diagnostic::REASON_NONE);
-  EXPECT_EQ(latest.status, Diagnostic::STATUS_TRACKING);
-  EXPECT_TRUE(latest.ok);
-  EXPECT_GT(latest.control_dt, 0.0);
+  EXPECT_EQ(value_of(latest, "reason"), "none");
+  EXPECT_EQ(value_of(latest, "status"), "tracking");
+  EXPECT_EQ(value_of(latest, "ok"), "true");
+  EXPECT_GT(std::stod(value_of(latest, "control_dt")), 0.0);
   EXPECT_EQ(last_command().header.frame_id, BASE_FRAME);
 }
 
@@ -437,7 +453,7 @@ TEST_F(PathFollowerFixture, APathWithoutADeadlineNeverGoesStale)
   ASSERT_TRUE(wait_for_commands(40));
   const std::lock_guard<std::mutex> lock(mutex_);
   for (const Diagnostic & diagnostic : diagnostics_) {
-    EXPECT_NE(diagnostic.reason, Diagnostic::REASON_INPUT_STALE);
+    EXPECT_NE(value_of(diagnostic, "reason"), "input_stale");
   }
 }
 
@@ -450,11 +466,11 @@ TEST_F(PathFollowerFixture, ATrajectoryThatStopsArrivingGoesStaleAndTheCommandKe
   ASSERT_TRUE(publish_trajectory(make_trajectory(helper_->now())));
   ASSERT_TRUE(wait_until("tracking", [this]() { return peak_linear() > 0.0; }));
 
-  ASSERT_TRUE(wait_for_reason(Diagnostic::REASON_INPUT_STALE));
+  ASSERT_TRUE(wait_for_reason("input_stale"));
   clear();
   ASSERT_TRUE(wait_for_commands(5));
   EXPECT_TRUE(every_command_is_zero());
-  EXPECT_TRUE(last_diagnostic().ok);
+  EXPECT_EQ(value_of(last_diagnostic(), "ok"), "true");
 }
 
 TEST_F(PathFollowerFixture, APathInAnotherFrameIsRejectedAndNotFollowed)
@@ -464,10 +480,10 @@ TEST_F(PathFollowerFixture, APathInAnotherFrameIsRejectedAndNotFollowed)
   ASSERT_TRUE(wait_for_commands(2));
   ASSERT_TRUE(publish_path(make_path(helper_->now(), "odom")));
 
-  ASSERT_TRUE(wait_for_reason(Diagnostic::REASON_INPUT_REJECTED));
+  ASSERT_TRUE(wait_for_reason("input_rejected"));
   EXPECT_TRUE(every_command_is_zero());
-  EXPECT_TRUE(last_diagnostic().ok);
-  EXPECT_NE(last_diagnostic().message.find("odom"), std::string::npos);
+  EXPECT_EQ(value_of(last_diagnostic(), "ok"), "true");
+  EXPECT_NE(status_of(last_diagnostic()).message.find("odom"), std::string::npos);
 }
 
 TEST_F(PathFollowerFixture, AnEmptyPathIsItsOwnReason)
@@ -477,9 +493,9 @@ TEST_F(PathFollowerFixture, AnEmptyPathIsItsOwnReason)
   ASSERT_TRUE(wait_for_commands(2));
   ASSERT_TRUE(publish_path(make_path(helper_->now(), MAP_FRAME, 0)));
 
-  ASSERT_TRUE(wait_for_reason(Diagnostic::REASON_INPUT_EMPTY));
+  ASSERT_TRUE(wait_for_reason("input_empty"));
   EXPECT_TRUE(every_command_is_zero());
-  EXPECT_TRUE(last_diagnostic().ok);
+  EXPECT_EQ(value_of(last_diagnostic(), "ok"), "true");
 }
 
 TEST_F(PathFollowerFixture, ResetTakesEffectBeforeTheNextCommandAndTheRampStartsAgain)
@@ -499,7 +515,7 @@ TEST_F(PathFollowerFixture, ResetTakesEffectBeforeTheNextCommandAndTheRampStarts
   EXPECT_FALSE(response->message.empty());
 
   // The reset drops the path along with the latches, so the follower falls back to no input.
-  ASSERT_TRUE(wait_for_reason(Diagnostic::REASON_NO_INPUT));
+  ASSERT_TRUE(wait_for_reason("no_input"));
   EXPECT_DOUBLE_EQ(last_command().twist.linear.x, 0.0);
 }
 
@@ -524,9 +540,9 @@ TEST_F(PathFollowerFixture, APathPublishedRightAfterAResetIsKeptRatherThanDroppe
 
   clear();
   ASSERT_TRUE(wait_until("the follower to take the new path", [this]() {
-    return last_diagnostic().status == Diagnostic::STATUS_TRACKING;
+    return value_of(last_diagnostic(), "status") == "tracking";
   }));
-  EXPECT_NE(last_diagnostic().reason, Diagnostic::REASON_NO_INPUT);
+  EXPECT_NE(value_of(last_diagnostic(), "reason"), "no_input");
 }
 
 TEST_F(PathFollowerFixture, AnAlignmentThatNeverFinishesIsReportedAsNotOk)
@@ -538,11 +554,12 @@ TEST_F(PathFollowerFixture, AnAlignmentThatNeverFinishesIsReportedAsNotOk)
   ASSERT_TRUE(publish_path(make_path(helper_->now(), MAP_FRAME, 41, 1.57)));
 
   ASSERT_TRUE(wait_until("the alignment to give up", [this]() {
-    return last_diagnostic().approach_state == Diagnostic::APPROACH_ALIGNMENT_TIMEOUT;
+    return value_of(last_diagnostic(), "approach_state") == "alignment_timeout";
   }));
   const Diagnostic latest = last_diagnostic();
-  EXPECT_FALSE(latest.ok);
-  EXPECT_EQ(latest.reason, Diagnostic::REASON_CONTROLLER);
+  EXPECT_EQ(value_of(latest, "ok"), "false");
+  EXPECT_EQ(status_of(latest).level, Status::ERROR);
+  EXPECT_EQ(value_of(latest, "reason"), "controller");
   EXPECT_DOUBLE_EQ(last_command().twist.angular.z, 0.0);
 }
 
@@ -555,9 +572,10 @@ TEST_F(PathFollowerFixture, ADirectedPathIsFollowedLikeAnyOtherWhenItOnlyGoesFor
 
   ASSERT_TRUE(wait_until("a forward command", [this]() { return peak_linear() > 0.0; }));
   const Diagnostic latest = last_diagnostic();
-  EXPECT_EQ(latest.status, Diagnostic::STATUS_TRACKING);
-  EXPECT_EQ(latest.travel_direction, Diagnostic::DIRECTION_FORWARD);
-  EXPECT_TRUE(latest.ok);
+  EXPECT_EQ(value_of(latest, "status"), "tracking");
+  EXPECT_EQ(value_of(latest, "travel_direction"), "forward");
+  EXPECT_EQ(value_of(latest, "ok"), "true");
+  EXPECT_EQ(status_of(latest).level, Status::OK);
 }
 
 TEST_F(PathFollowerFixture, PurePursuitRefusesAReversingPathAndKeepsPublishingZero)
@@ -568,14 +586,15 @@ TEST_F(PathFollowerFixture, PurePursuitRefusesAReversingPathAndKeepsPublishingZe
   ASSERT_TRUE(publish_directed_path(make_directed_path(helper_->now(), true)));
 
   ASSERT_TRUE(wait_until("the follower to refuse the path", [this]() {
-    return last_diagnostic().status == Diagnostic::STATUS_PATH_NOT_SUPPORTED;
+    return value_of(last_diagnostic(), "status") == "path not supported";
   }));
   clear();
   ASSERT_TRUE(wait_for_commands(5));
   EXPECT_TRUE(every_command_is_zero());
   const Diagnostic latest = last_diagnostic();
-  EXPECT_EQ(latest.reason, Diagnostic::REASON_CONTROLLER);
-  EXPECT_FALSE(latest.ok);
+  EXPECT_EQ(value_of(latest, "reason"), "controller");
+  EXPECT_EQ(value_of(latest, "ok"), "false");
+  EXPECT_EQ(status_of(latest).level, Status::ERROR);
 }
 
 TEST_F(PathFollowerFixture, AParameterOutsideItsRangeStopsTheNodeFromStarting)

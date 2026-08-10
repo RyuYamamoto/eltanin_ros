@@ -6,6 +6,7 @@ find_package(ament_cmake REQUIRED)
 find_package(eltanin REQUIRED)
 find_package(eltanin_msgs REQUIRED)
 find_package(eltanin_ros_common REQUIRED)
+find_package(diagnostic_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -32,10 +33,11 @@ target_include_directories(${PROJECT_NAME} PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>")
 # src/diagnostic.hpp is private: the single shape of a line this package logs, not part of the API.
 target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-# eltanin_ros_common_runtime carries eltanin::core, eltanin::map, eltanin_msgs, geometry_msgs,
-# nav_msgs and rclcpp; eltanin::control and std_srvs are what this package adds to that.
+# eltanin_ros_common_runtime carries eltanin::core, eltanin::map, eltanin_msgs, diagnostic_msgs,
+# geometry_msgs, nav_msgs and rclcpp; eltanin::control and std_srvs are what this package adds.
 target_link_libraries(${PROJECT_NAME} PUBLIC
   eltanin::control
+  ${diagnostic_msgs_TARGETS}
   eltanin_ros_common::eltanin_ros_common_runtime
   rclcpp::rclcpp
   rclcpp_components::component

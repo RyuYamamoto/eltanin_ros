@@ -17,6 +17,7 @@
 #include "src/diagnostic.hpp"
 
 #include <eltanin/control/follower_factory.hpp>
+#include <eltanin_ros_common/diagnostic_conversion.hpp>
 #include <eltanin_ros_common/directed_path_conversion.hpp>
 #include <eltanin_ros_common/geometry_conversion.hpp>
 #include <eltanin_ros_common/path_conversion.hpp>
@@ -41,7 +42,7 @@ namespace eltanin_controller
 namespace
 {
 
-using Diagnostic = eltanin_msgs::msg::FollowerDiagnostic;
+using composition::FollowerReason;
 
 /// tf2 reads a zero time as "the latest available", which is what a control cycle wants.
 const rclcpp::Time LATEST_AVAILABLE(0, 0, RCL_ROS_TIME);
@@ -272,7 +273,8 @@ PathFollower::PathFollower(const rclcpp::NodeOptions & options)
 
   command_publisher_ =
     create_publisher<geometry_msgs::msg::TwistStamped>("~/cmd_vel_raw", control_qos());
-  diagnostic_publisher_ = create_publisher<Diagnostic>("~/follower_state", control_qos());
+  diagnostic_publisher_ =
+    create_publisher<diagnostic_msgs::msg::DiagnosticArray>("~/diagnostics", control_qos());
   lookahead_publisher_ =
     create_publisher<geometry_msgs::msg::PointStamped>("~/lookahead_point", control_qos());
 
@@ -331,7 +333,7 @@ PathFollower::CycleOutcome PathFollower::run_cycle(const rclcpp::Time & now)
   const eltanin_ros_common::PeriodicClock::Tick tick = clock_.tick();
   if (!tick.usable()) {
     CycleOutcome cycle;
-    cycle.outcome = composition::input_failure(Diagnostic::REASON_NO_DT);
+    cycle.outcome = composition::input_failure(FollowerReason::NoDt);
     cycle.message =
       diagnostic::line("no usable elapsed time this cycle: " + std::to_string(tick.seconds) + " s");
     if (no_dt_latch_.should_warn()) {
@@ -353,18 +355,18 @@ PathFollower::CycleOutcome PathFollower::run_cycle(const rclcpp::Time & now)
   CycleOutcome cycle;
   switch (reading.state) {
     case PathInput::State::NeverReceived:
-      cycle.outcome = composition::input_failure(Diagnostic::REASON_NO_INPUT);
+      cycle.outcome = composition::input_failure(FollowerReason::NoInput);
       cycle.message = diagnostic::line("no path has arrived yet");
       if (no_input_latch_.should_warn()) {
         RCLCPP_WARN(get_logger(), "%s", cycle.message.c_str());
       }
       return cycle;
     case PathInput::State::Rejected:
-      cycle.outcome = composition::input_failure(Diagnostic::REASON_INPUT_REJECTED);
+      cycle.outcome = composition::input_failure(FollowerReason::InputRejected);
       cycle.message = rejection;
       return cycle;
     case PathInput::State::Stale:
-      cycle.outcome = composition::input_failure(Diagnostic::REASON_INPUT_STALE);
+      cycle.outcome = composition::input_failure(FollowerReason::InputStale);
       cycle.message = diagnostic::line(
         "the path is " + std::to_string(reading.elapsed_seconds) + " s old, past the deadline");
       if (stale_latch_.should_warn()) {
@@ -376,7 +378,7 @@ PathFollower::CycleOutcome PathFollower::run_cycle(const rclcpp::Time & now)
   }
 
   if (reading.snapshot.path->empty()) {
-    cycle.outcome = composition::input_failure(Diagnostic::REASON_INPUT_EMPTY);
+    cycle.outcome = composition::input_failure(FollowerReason::InputEmpty);
     cycle.message = diagnostic::line("the path carries no poses");
     if (empty_latch_.should_warn()) {
       RCLCPP_WARN(get_logger(), "%s", cycle.message.c_str());
@@ -386,7 +388,7 @@ PathFollower::CycleOutcome PathFollower::run_cycle(const rclcpp::Time & now)
 
   const std::optional<eltanin::Pose2D> robot = robot_pose();
   if (!robot.has_value()) {
-    cycle.outcome = composition::input_failure(Diagnostic::REASON_NO_TRANSFORM);
+    cycle.outcome = composition::input_failure(FollowerReason::NoTransform);
     cycle.message = diagnostic::line(
       "frames.base '" + profile_.frames().base + "' in frames.map '" + profile_.frames().map +
       "' is not available");
@@ -423,10 +425,10 @@ PathFollower::CycleOutcome PathFollower::run_cycle(const rclcpp::Time & now)
     cycle.has_cusp = run.has_cusp;
   }
 #endif
-  if (cycle.outcome.reason != Diagnostic::REASON_NONE) {
+  if (cycle.outcome.reason != FollowerReason::None) {
     cycle.message = diagnostic::line(
-      "eltanin returned status " + std::to_string(cycle.outcome.status) + " and approach state " +
-      std::to_string(cycle.outcome.approach_state));
+      std::string("eltanin returned status '") + eltanin::control::to_string(cycle.outcome.status) +
+      "' and approach state '" + composition::name_of(cycle.outcome.approach_state) + "'");
     if (!cycle.outcome.ok && controller_latch_.should_warn()) {
       RCLCPP_WARN(get_logger(), "%s", cycle.message.c_str());
     }
@@ -442,23 +444,26 @@ void PathFollower::publish_cycle(const CycleOutcome & cycle, const rclcpp::Time 
   command.twist = eltanin_ros_common::to_twist_msg(cycle.outcome.command);
   command_publisher_->publish(command);
 
-  Diagnostic diagnostic;
+  eltanin_ros_common::DiagnosticStatusBuilder builder(
+    get_fully_qualified_name(), composition::level_of(cycle.outcome), cycle.message);
+  builder.add("reason", composition::name_of(cycle.outcome.reason))
+    .add("status", eltanin::control::to_string(cycle.outcome.status))
+    .add("approach_state", composition::name_of(cycle.outcome.approach_state))
+    .add("ok", cycle.outcome.ok)
+    .add("remaining_arc", cycle.remaining_arc)
+    .add("position_error", cycle.position_error)
+    .add("yaw_error", cycle.yaw_error)
+    .add("lookahead_index", cycle.outcome.lookahead_index)
+    .add("control_dt", cycle.control_dt)
+    .add("align_elapsed", cycle.align_elapsed)
+    .add("travel_direction", composition::name_of(cycle.travel_direction))
+    .add("run_index", cycle.run_index)
+    .add("cusp_index", cycle.cusp_index)
+    .add("has_cusp", cycle.has_cusp);
+
+  diagnostic_msgs::msg::DiagnosticArray diagnostic;
   diagnostic.header.stamp = now;
-  diagnostic.status = cycle.outcome.status;
-  diagnostic.approach_state = cycle.outcome.approach_state;
-  diagnostic.reason = cycle.outcome.reason;
-  diagnostic.ok = cycle.outcome.ok;
-  diagnostic.message = cycle.message;
-  diagnostic.remaining_arc = cycle.remaining_arc;
-  diagnostic.position_error = cycle.position_error;
-  diagnostic.yaw_error = cycle.yaw_error;
-  diagnostic.lookahead_index = static_cast<std::uint32_t>(cycle.outcome.lookahead_index);
-  diagnostic.control_dt = cycle.control_dt;
-  diagnostic.align_elapsed = cycle.align_elapsed;
-  diagnostic.travel_direction = eltanin_ros_common::to_direction_msg(cycle.travel_direction);
-  diagnostic.run_index = static_cast<std::uint32_t>(cycle.run_index);
-  diagnostic.cusp_index = static_cast<std::uint32_t>(cycle.cusp_index);
-  diagnostic.has_cusp = cycle.has_cusp;
+  diagnostic.status.push_back(builder.take());
   diagnostic_publisher_->publish(diagnostic);
 
   if (!cycle.outcome.has_lookahead) {
