@@ -9,13 +9,17 @@ The design is recorded in [`docs/design/eltaninnavyuros.md`](docs/design/eltanin
 
 ## Safety notice
 
-> **TODO (task 23).** The real-robot (kachaka) startup sequence and its safety warnings are written
-> here once the sequence has been validated on hardware. The key warning to document is that
-> **enabling command output while the robot is on its dock causes it to drive forward** — the
-> `collision_predictor` output must stay disabled until a human has confirmed the robot is off the
-> dock (design §7.1 / F-17 / R-5).
+> **`collision_predictor` starts with its output disabled, and turning it on is the moment the
+> robot can move.** `ros2 service call /collision_predictor/enable_output std_srvs/srv/SetBool
+> "{data: true}"` makes the node publish `/cmd_vel` from the next cycle; if `cmd_vel_raw` and
+> `local_map` are both fresh at that moment, **the robot drives immediately, dock or no dock**
+> (design §7.1 / F-17 / R-5). `output_enabled_on_startup` is `false` in the shipped configuration
+> for exactly this reason, and the confirmation that the robot is off its dock is a human step that
+> must not be automated.
 >
-> Until then, treat every launch file in this repository as simulation-only.
+> **TODO (task 23).** The rest of the real-robot (kachaka) startup sequence is written here once it
+> has been validated on hardware. Until then, treat every launch file in this repository as
+> simulation-only.
 
 ## Workspace layout
 
@@ -142,7 +146,7 @@ creates it, so that nothing looks available before it is.
 | `eltanin_ros_common` | conversions, clock, watchdog, TF, parameter validation | **conversions, clock, watchdog and robot profile implemented**; the TF helper stays inside `global_path_planner` until a second user appears |
 | `eltanin_costmap` | `global_costmap` and `local_map` nodes | **`global_costmap` implemented**; `local_map` in task 15 |
 | `eltanin_planner` | `global_path_planner` and `local_path_planner` nodes | **`global_path_planner` implemented**; `local_path_planner` in tasks 17 and 19 |
-| `eltanin_controller` | `path_follower` and `collision_predictor` nodes | **`path_follower` implemented**; `collision_predictor` in task 12 |
+| `eltanin_controller` | `path_follower` and `collision_predictor` nodes | **both implemented** |
 | `eltanin_navigator` | orchestrator | not implemented (tasks 13, 21) |
 | `eltanin_simulator` | `simple_simulator` node | not implemented (task 10) |
 | `eltanin_bringup` | launch / config / rviz / map, plus the `goal_pose_relay` script | **`eltanin_bringup.launch.py` implemented**; simulation and kachaka bringup in tasks 10 and 22 |
@@ -588,23 +592,24 @@ runs it at `-O0`:
 
 ## `eltanin_controller`
 
-One node so far: `path_follower`. It turns a path into a **requested** velocity on
-`~/cmd_vel_raw`. It is not the owner of `/cmd_vel` — the limiting and the final say belong to
-`collision_predictor` (task 12), which is also the only consumer of `~/cmd_vel_raw`. Until that node
-exists, nothing drives the robot from here; what this node produces is observable on the topic and
-nowhere else.
+Two nodes. `path_follower` turns a path into a **requested** velocity on `~/cmd_vel_raw`;
+`collision_predictor` is the only consumer of that topic and the single owner of `/cmd_vel`. The
+split is the whole point: the follower may be restarted, reconfigured or blocked without `/cmd_vel`
+ever going quiet, and the node that owns the wheels runs outside every action.
 
-### The publish never stops, and that is a property of the code
+### `path_follower`
+
+#### The publish never stops, and that is a property of the code
 
 navyu returned from its control callback without publishing anything when it had no path or could
 not find the robot, which leaves the last command sitting on the driver. Here every failure is a
 value returned from `run_cycle()`, and `on_timer()` is two lines: run the cycle, publish the cycle.
 There is no early `return` in `on_timer()` to forget a publish in, so "a zero command still goes out"
-is not a rule a reviewer has to check. `~/cmd_vel_raw` and `~/follower_state` are published on every
+is not a rule a reviewer has to check. `~/cmd_vel_raw` and `~/diagnostics` are published on every
 cycle without exception; `~/lookahead_point` only while tracking, because the point is zero
 otherwise and drawing it at the origin would be a lie.
 
-### The composition, and why `apply_linear_limit()` is not `std::min`
+#### The composition, and why `apply_linear_limit()` is not `std::min`
 
 `GoalApproach` runs first every cycle. Its state decides whether `PurePursuit` runs at all:
 
@@ -630,9 +635,10 @@ oscillation the approach exists to remove. `test_command_composition.cpp` pins t
 `PathFollower` interface — `compute()` becoming `follow()`, `PurePursuit::Result` becoming
 `FollowResult` — down to that one function, its signature and its tests.
 
-### `ok = false` means three things, and the navigator can treat it as one
+#### `ok = false` means three things, and the navigator can treat it as one
 
-`~/follower_state` carries `ok`. It is false only where the follower cannot recover on its own and
+`~/diagnostics` carries `ok` among its values. It is false only where the follower cannot recover on
+its own and
 would sit at zero forever while the upstream keeps sending the same input:
 
 - `GoalApproach` reported `AlignmentTimeout` — it latches until `~/reset`
@@ -649,7 +655,7 @@ for itself. So the navigator's rule can be exactly "`ok == false` is a stopping 
 empty path before the follower is reached. A one-pose path comes back as `GoalReached`, not
 `NoPath`.
 
-### Nothing resets the follower except `~/reset`
+#### Nothing resets the follower except `~/reset`
 
 The follower never resets itself when the path changes. Whether a replan should drop the velocity
 ramp depends on **why** the replan happened, and only the navigator knows that: a replan triggered
@@ -661,14 +667,14 @@ two controllers — that would make the next cycle a first tick and add one extr
 
 **Operational consequence while there is no navigator:** `Reached` and `AlignmentTimeout` latch, so
 after the first goal the follower will not follow a second path until `~/reset` is called by hand.
-`approach_state` stays at `REACHED` on `~/follower_state`, so the state is visible rather than
+`approach_state` stays at `reached` on `~/diagnostics`, so the state is visible rather than
 mysterious.
 
 ```bash
 ros2 service call /path_follower/reset std_srvs/srv/Trigger
 ```
 
-### One input, chosen at startup, with two different meanings of "too old"
+#### One input, chosen at startup, with two different meanings of "too old"
 
 `path_source` selects which subscription is created, and only one is:
 
@@ -695,7 +701,7 @@ The velocity annotation on `Trajectory2D` (`linear_velocity`, `angular_velocity`
 is dropped by `eltanin_ros_common::to_path()`, because `eltanin` has no trajectory type and
 `PurePursuit` cannot consume a velocity profile yet.
 
-### What the defaults actually do
+#### What the defaults actually do
 
 The node declares no `max_angular_vel` of its own: `robot.max_angular_vel` is fed into both
 generators, as `eltanin`'s `control-design.md` §12.2 asks. `desired_linear_vel` is a cruise speed
@@ -716,12 +722,12 @@ turn overshoots the tolerance band every cycle and the robot spins without setti
 only to `PurePursuit`'s two in-place turns — the initial alignment and the re-alignment near the
 last pose. `GoalApproach`'s final turn is proportional and converges for any `dt` below 0.5 s.
 
-`~/follower_state` publishes `control_dt` every cycle so the real distribution can be read with
+`~/diagnostics` publishes `control_dt` every cycle so the real distribution can be read with
 `ros2 topic echo` instead of guessed. If it does turn out to be a problem, lower
 `robot.max_angular_vel` or raise `yaw_tolerance`; raising `update_frequency` is the last resort,
 since more cycles is also more jitter.
 
-### The two `eltanin` calls are not wrapped in a `try`
+#### The two `eltanin` calls are not wrapped in a `try`
 
 `GoalApproach::compute()` and `PathFollower::follow()` both throw `std::invalid_argument` on a
 non-finite pose or a non-positive `dt`. Neither can arrive: `to_transform2d()` validates the pose
@@ -730,7 +736,7 @@ before it becomes one, and
 stops holding. If the process does die, the system still fails safe — `~/cmd_vel_raw` stops, and
 `collision_predictor`'s `cmd_timeout` zeroes `/cmd_vel`.
 
-### Parameters and startup
+#### Parameters and startup
 
 `update_frequency` 20.0 / `path_source` `path` / `desired_linear_vel` 0.5 / `yaw_tolerance` 0.07 /
 `lookahead_time` 0.1 / `min_lookahead_dist` 0.3 / `xy_goal_tolerance` 0.10 /
@@ -746,10 +752,9 @@ conditions `PurePursuit::create()` and `GoalApproach::create()` check, in their 
 `create()` returns a bare `std::optional` and cannot say which value it disliked, so the line that
 names the parameter can only be written here.
 
-### Following a path by hand
+#### Following a path by hand
 
-`path_follower` is not in `eltanin_bringup.launch.py` yet; it goes in together with
-`collision_predictor` in task 12, since a `~/cmd_vel_raw` nobody subscribes to is dead wiring.
+Neither node is in `eltanin_bringup.launch.py` yet; both go in with the navigator in task 13.
 
 ```bash
 ros2 launch eltanin_bringup eltanin_bringup.launch.py map:=<path-to-map.yaml>
@@ -758,13 +763,13 @@ ros2 run tf2_ros static_transform_publisher --frame-id odom --child-frame-id bas
 
 ros2 run eltanin_controller path_follower
 ros2 topic echo /path_follower/cmd_vel_raw
-ros2 topic echo /path_follower/follower_state
+ros2 topic echo /path_follower/diagnostics
 ```
 
 Give a goal with RViz's `2D Goal Pose`. `~/global_path` is `volatile` and published once per goal,
 so a `path_follower` started after the planner has to be given the goal again.
 
-### Corrections to the design document
+#### Corrections to the design document
 
 - §6.5, D-17, §8.2 and §10 S4 all assume `PurePursuit::Status` gains an `Approaching` value. It never
   did; approach is `GoalApproach::State`'s vocabulary alone (`eltanin`'s `control-design.md` §12.6).
@@ -773,13 +778,15 @@ so a `path_follower` started after the planner has to be given the goal again.
   *sign* is not: `to_path(Trajectory2D)` turns it into the segment direction of the `eltanin::Path`
   it builds, which is the only part of it any follower can act on.
 - §6.5 says a cycle with `dt <= 0` is skipped. It is skipped as far as `eltanin` goes, but
-  `~/cmd_vel_raw` and `~/follower_state` are still published: no path in this node stops the publish.
-- §6.5 left `~/follower_state` as "reuse part of `NavigationState`, or put it in diagnostics".
-  `eltanin_msgs/FollowerDiagnostic` was added instead — `NavigationState`'s `STATE_*` are the seven
-  states of the navigator's machine and say nothing about a follower. **The topic name is still
-  `~/follower_state`; only the type is named `FollowerDiagnostic`**, because `eltanin` is introducing
-  `control::FollowerState` as the *input* to its follower and one name with two opposite meanings in
-  the same translation unit is worse than a slightly indirect one.
+  `~/cmd_vel_raw` and `~/diagnostics` are still published: no path in this node stops the publish.
+- §6.5 left `~/follower_state` as "reuse part of `NavigationState`, or put it in diagnostics". It
+  first became `~/follower_state` carrying a purpose-built `eltanin_msgs/FollowerDiagnostic`; **task
+  12 replaced both with `~/diagnostics` carrying `diagnostic_msgs/DiagnosticArray`**, and deleted
+  the message. No information was lost — `status`, `approach_state`, `reason`, `ok` and the numbers
+  are all `values` entries now — and two things went away with the wire format: the 35-line
+  `to_wire()` tables that made an enum's declaration order a wire format, and `eltanin_msgs` as a
+  dependency of `command_composition`. `reason` is an `enum class FollowerReason` and reaches the
+  wire as a name. See the `collision_predictor` section for the vocabulary the two nodes share.
 - §6.5 lists `max_angular_vel` among the node's parameters. It is not declared here;
   `robot.max_angular_vel` reaches both generators.
 - `PurePursuit::Status::NoPath` is returned only for an empty path, which the node rejects before
@@ -814,6 +821,160 @@ so a `path_follower` started after the planner has to be given the goal again.
   collided with `MpcFollowerParams::min_linear_vel`. One is a magnitude and the other is a signed
   bound; they are now `min_speed` / `terminal_speed`. **No ROS key changed**, because the profile
   has never been reachable from a parameter.
+
+### `collision_predictor`
+
+The single owner of `/cmd_vel`. It subscribes to `path_follower/cmd_vel_raw` and
+`local_map/local_map`, limits the requested command against the local map with `eltanin`'s
+`VelocityGovernor`, and publishes `geometry_msgs/Twist` — the one unstamped message in the stack,
+because kachaka accepts nothing else (D-21).
+
+#### The watchdog is the reason this node exists
+
+navyu had two defects, and both come from nobody owning `/cmd_vel`:
+
+| # | navyu | symptom | here |
+|---|---|---|---|
+| N-1 | the control callback returned without publishing | the **last** command stays on the driver, so a lost tf keeps the robot driving | every failure is a value from `run_cycle()`; `on_timer()` is two lines and has no early `return` |
+| N-2 | the limited value was written back into the subscription buffer | when the input stopped, the limit **ratcheted to zero** | the subscription writes the received value and nothing else ever writes it; the timer copies it out |
+
+Every cycle decides in this order, and the first condition that holds is the `reason`:
+
+| # | `reason` | `level` | `/cmd_vel` |
+|---|---|---|---|
+| 1 | `output_disabled` | `WARN` | **nothing**, except one zero on the disabling cycle |
+| 2 | `command_rejected` | `ERROR` | zero |
+| 3 | `command_missing` | `STALE` | zero |
+| 4 | `command_stale` | `STALE` | zero |
+| 5 | `map_rejected` | `ERROR` | zero |
+| 6 | `map_missing` | `STALE` | zero — **the steady state until `local_map` exists (task 15)** |
+| 7 | `map_stale` | `STALE` | zero |
+| 8 | `no_transform` | `WARN` | zero |
+| 9 | `outside_map` | `WARN` | zero |
+| 10 | `limited` | `WARN` | the governor result |
+| 11 | `none` | `OK` | the governor result |
+
+There is no path in the code that re-sends an old command, and none that publishes nothing while the
+output is enabled. `limiter_diagnostic.hpp` holds that table once; `forces_zero_command()` is what
+`CycleOutcome::command` staying at its zero default means, and the two entries that carry a command
+are the only ones that assign it.
+
+#### `dt` is not a gate
+
+`path_follower` treats an unusable elapsed time as a failed cycle. This node does not: `dt` is
+handed to the hysteresis and nothing else, and the hysteresis reads a non-positive step as "hold the
+current, stricter limit". A cycle with no measurable elapsed time still checks the map and still
+publishes.
+
+#### The output starts disabled, and disabling it means stopping
+
+`output_enabled_on_startup` is `false`. `~/enable_output` (`std_srvs/SetBool`) is the only way to
+turn the output on, and switching it back off publishes **one** zero command before going quiet —
+relying on the driver's own watchdog to stop the robot would be N-1 again, one layer down.
+
+The three other topics — `~/predicted_poses`, `~/footprint` and `~/diagnostics` — are published on
+**every** cycle, disabled ones included. A node that is silent because it was told to be must not
+look like a node that died.
+
+#### The limiter law changed with this node
+
+Driving `eltanin`'s limiter for real turned up five problems, and `eltanin` was changed rather than
+the node; the reasoning lives in `eltanin/docs/collision-design.md` §2.5.1 and §3.5 to §3.10, and
+only the consequences are here.
+
+| what was wrong | what it is now |
+|---|---|
+| the output was effectively three-valued: with kachaka's defaults there was one intermediate step between full speed and a stop | the colliding step is bisected four times, so `collision_distance` is continuous to 1.7 mm |
+| the 2 s rollout tip wandered 0.30 m under the angular jitter of pure pursuit — 2.5x the footprint half width | the horizon is derived: `reaction_time + \|v\| / robot.max_decel`, 0.9 s on kachaka. `prediction_time` is gone |
+| latency was nowhere in the law | a second cap, `(collision_distance - margin) / reaction_time`, and `time_to_collision` in the diagnostic |
+| a single mistaken cell was a full stop | a proximity ramp on the clearance, floored at `min_proximity_scale` so it slows down but never stops |
+| the limit snapped back the moment a cell cleared | `VelocityGovernor` releases over `release_time`; dropping stays immediate |
+
+The enabling change is that this node does **not** hand the local map to the limiter. `local_map`
+carries no inflation (D-14), which is what made the two-stage collision check unsound there (R-10).
+Each received map goes through `build_distance_map()` once, and the limiter runs on the distance
+map: the `Free` short-circuit becomes exactly true, and the cell value is the clearance the ramp
+needs. **One missing inflation was the common cause of both R-10 and the staircase, and building a
+distance field in the consumer was the answer to both.** The node keeps no costmap; the distance
+map alone still identifies the obstacles, because a cell at distance 0 is one.
+
+`exact_footprint_check` stays `true` by default. On a distance map it is no longer required for
+correctness, only cheaper or not, and the default is kept so that handing a raw costmap to this code
+some day does not silently degrade.
+
+#### Parameters and startup
+
+`update_frequency` 20.0 / `cmd_timeout` 0.3 / `map_timeout` 0.5 / `output_enabled_on_startup` false
+/ `prediction_steps` 10 / `reaction_time` 0.3 / `collision_margin` 0.2 / `exact_footprint_check`
+true / `stop_clearance` 0.10 / `slow_down_clearance` 0.50 / `min_proximity_scale` 0.25 /
+`release_time` 0.5 / `clearance_max_distance` 1.0.
+
+`robot.footprint`, `robot.max_decel`, `robot.max_linear_vel`, `frames.map` and `frames.base` come
+from the machine profile and are **not** redeclared. Unlike `path_follower`, every key here has a
+default, so the node starts on the robot profile alone; the shipped
+`config/collision_predictor.param.yaml` writes all thirteen out anyway, and `test_watchdog.cpp`
+fails if the two sets ever disagree.
+
+`validate()` reports the first violated condition with the key, the value and the bound, in the
+order `update_frequency`, `cmd_timeout`, `map_timeout`, `prediction_steps`, `reaction_time`,
+`collision_margin`, `stop_clearance`, `slow_down_clearance`, `min_proximity_scale`, `release_time`,
+`clearance_max_distance`, `robot.max_decel`. Three more conditions are warnings rather than errors:
+`update_frequency` below 4 Hz (the kachaka bridge watchdog is 0.3 s), `exact_footprint_check` off,
+and a prediction step long enough to skip through the footprint —
+`max_linear_vel * horizon(max_linear_vel) / prediction_steps >= 2 * inscribed_radius`. That last one
+is why raising the speed limit means raising `prediction_steps` too.
+
+#### Running it by hand, with no `local_map`
+
+```bash
+ros2 run eltanin_controller collision_predictor \
+  --ros-args --params-file "$(ros2 pkg prefix eltanin_ros_common)/share/eltanin_ros_common/config/robot/kachaka.yaml"
+
+ros2 topic echo /collision_predictor/diagnostics   # reason: output_disabled
+ros2 topic hz /cmd_vel                             # nothing at all
+
+ros2 service call /collision_predictor/enable_output std_srvs/srv/SetBool "{data: true}"
+ros2 topic hz /cmd_vel                             # 20 Hz of zero, reason: map_missing
+```
+
+That last line is the whole node in one measurement: with no map, no command and no tf it publishes
+a zero command twenty times a second rather than nothing.
+
+#### The temporary wiring it replaces
+
+The uncommitted `eltanin_kachaka_demo` drives the robot through `cmd_vel_relay.py` and
+`navyu_safety_limiter`, and both exist only because this node did not. **Removing them is task 22 /
+23**, not this task: the swap has to be verified by driving the robot.
+
+#### Corrections to the design document
+
+- **§6.6 and §7.1 name `eltanin_msgs/SetEnabled` in one place and `std_srvs/SetBool` in another.**
+  It is `std_srvs/SetBool`; `eltanin_msgs` has no `srv/` directory and this service needs nothing a
+  `SetBool` does not have.
+- **`~/diagnostics` is `diagnostic_msgs/DiagnosticArray`, published at 20 Hz on the node-relative
+  topic.** It is deliberately not sent to the aggregating `/diagnostics`, whose convention is about
+  1 Hz; a launch remap or an analyzer is where aggregation belongs. `path_follower` moved to the
+  same shape, and `eltanin_msgs/FollowerDiagnostic` was deleted.
+- **`max_deceleration` is not a parameter of this node.** §6.6 lists it; it is `robot.max_decel`,
+  because "how hard can this machine brake" must not have three different answers.
+- **"disabled means publish nothing" applies to `/cmd_vel` only.** The diagnostic, the predicted
+  poses and the footprint go out every cycle, and the enabled-to-disabled transition publishes one
+  zero command.
+- **`outside_map` is a stopping condition the design document does not have.** `limit()` truncates a
+  rollout that leaves the map without limiting anything, so the command it returns was never
+  checked; publishing it would be reporting a clearance nobody measured.
+- **§6.7 has the navigator subscribing to `collision_predictor/cmd_vel`.** The topic is the relative
+  name `cmd_vel`, so it resolves to `/cmd_vel` in the root namespace, and that is what a consumer
+  subscribes to.
+- **`prediction_time` no longer exists** and `reaction_time` replaced it. The horizon is derived
+  from the requested speed, so it is not a number anyone sets.
+- **Parameters are declared with defaults here**, unlike `path_follower`, which refuses to start on
+  a missing key. The node has to be startable with nothing but a machine profile, and its unsafe
+  default — the output being on — is the one that is `false`.
+- **A stopped tf cannot be reproduced in a test.** `tf2` keeps the latest sample for a time-zero
+  lookup, so `test_watchdog.cpp` pins the missing lookup and the recovery from it instead; the
+  deadline that actually protects a moving robot against a dead localizer is `cmd_timeout`, because
+  the follower stops publishing once its own transform is gone.
 
 ## `eltanin_bringup`
 
@@ -1167,11 +1328,19 @@ row-major layout of `MapGeometry`, `OccupancyGrid` and `eltanin_msgs/Costmap` is
 flip or transpose is involved. (`eltanin::map_io::load_map` does flip rows, because PGM starts at the
 top; that does not apply to messages.)
 
-### Parameters have no defaults in code
+### Parameters have no defaults in code, with one deliberate exception
 
 **Every node refuses to start on a key that is not set.** There are no fallbacks in
 `declare_parameter`, and `declare_robot_profile()` has none either. A missing key is one `ERROR`
 line naming it and a `std::runtime_error` from the constructor.
+
+**`collision_predictor` is the exception**, and it is one on purpose: it declares all thirteen of
+its own keys with defaults so that it starts on a machine profile alone. It owns `/cmd_vel`, so
+"cannot start" is the worst outcome available to it, and the parameter whose wrong value would be
+dangerous — `output_enabled_on_startup` — defaults to the safe side. The silent-typo cost of a
+default is paid back by `test_watchdog.cpp`, which fails when the shipped yaml and the declared key
+set disagree in either direction. The machine profile is still mandatory for it, so nothing about
+`robot.*` or `frames.*` changes.
 
 This reverses design §7's F-14, which asked for a meaningful default behind every parameter, on the
 grounds that navyu crashed at startup on a key mismatch. **That reasoning is backwards.** Crashing
