@@ -63,6 +63,30 @@ bool is_finite(const eltanin::Pose2D & pose)
          std::isfinite(pose.yaw);
 }
 
+/// One closed outline of the footprint placed at pose, drawn as a LINE_STRIP in frame_id.
+Marker outline_at(
+  const eltanin::Pose2D & pose, const eltanin::Polygon2D & footprint, const std::string & frame_id,
+  const builtin_interfaces::msg::Time & stamp, const std::string & ns, int id, double line_width)
+{
+  const eltanin::Transform2D placement = eltanin::Transform2D::from_pose(pose);
+  Marker marker;
+  marker.header.frame_id = frame_id;
+  marker.header.stamp = stamp;
+  marker.ns = ns;
+  marker.id = id;
+  marker.type = Marker::LINE_STRIP;
+  marker.action = Marker::ADD;
+  marker.pose.orientation.w = 1.0;
+  marker.scale.x = line_width;
+  marker.points.reserve(footprint.size() + 1);
+  for (const Eigen::Vector2d & vertex : footprint) {
+    marker.points.push_back(to_point(placement * vertex));
+  }
+  // Polygon2D is implicitly closed; a LINE_STRIP is not, so the first vertex is repeated.
+  marker.points.push_back(to_point(placement * footprint[0]));
+  return marker;
+}
+
 }  // namespace
 
 ConversionResult<visualization_msgs::msg::MarkerArray> to_footprint_markers(
@@ -135,6 +159,67 @@ ConversionResult<visualization_msgs::msg::MarkerArray> to_footprint_markers(
     // Polygon2D is implicitly closed; a LINE_STRIP is not, so the first vertex is repeated.
     marker.points.push_back(to_point(placement * footprint[0]));
     markers.markers.push_back(std::move(marker));
+  }
+  return Result::success(std::move(markers));
+}
+
+ConversionResult<visualization_msgs::msg::MarkerArray> to_swept_footprint_markers(
+  const eltanin::Path & path, const eltanin::Polygon2D & footprint,
+  const std::vector<std_msgs::msg::ColorRGBA> & colors, const std::string & frame_id,
+  const builtin_interfaces::msg::Time & stamp, bool mark_contact, const std::string & ns,
+  double line_width)
+{
+  using Result = ConversionResult<visualization_msgs::msg::MarkerArray>;
+  if (footprint.size() < MINIMUM_VERTICES) {
+    return Result::failure(reject(
+      "the footprint has " + std::to_string(footprint.size()) + " vertices, at least " +
+      std::to_string(MINIMUM_VERTICES) + " are needed"));
+  }
+  if (colors.size() != path.size()) {
+    return Result::failure(reject(
+      "there are " + std::to_string(colors.size()) + " colours for " + std::to_string(path.size()) +
+      " poses; one per pose is needed"));
+  }
+  if (!std::isfinite(line_width) || line_width <= 0.0) {
+    return Result::failure(reject(
+      "line_width is " + std::to_string(line_width) + ", which must be finite and greater than 0"));
+  }
+
+  visualization_msgs::msg::MarkerArray markers;
+  markers.markers.push_back(delete_all(ns));
+  if (path.empty()) {
+    return Result::success(std::move(markers));
+  }
+
+  for (std::size_t index = 0; index < path.size(); ++index) {
+    if (!is_finite(path[index])) {
+      return Result::failure(
+        reject("pose " + std::to_string(index) + " of the path is not finite"));
+    }
+    Marker marker =
+      outline_at(path[index], footprint, frame_id, stamp, ns, static_cast<int>(index), line_width);
+    marker.color = colors[index];
+    markers.markers.push_back(std::move(marker));
+  }
+
+  // The last pose is where the rollout stopped, so a colliding one ends there; mark that point.
+  if (mark_contact) {
+    Marker contact;
+    contact.header.frame_id = frame_id;
+    contact.header.stamp = stamp;
+    contact.ns = ns + "_contact";
+    contact.id = 0;
+    contact.type = Marker::SPHERE;
+    contact.action = Marker::ADD;
+    contact.pose.position = to_point(path[path.size() - 1].position);
+    contact.pose.orientation.w = 1.0;
+    contact.scale.x = 0.08;
+    contact.scale.y = 0.08;
+    contact.scale.z = 0.08;
+    contact.color = colors[path.size() - 1];
+    markers.markers.push_back(std::move(contact));
+  } else {
+    markers.markers.push_back(delete_all(ns + "_contact"));
   }
   return Result::success(std::move(markers));
 }

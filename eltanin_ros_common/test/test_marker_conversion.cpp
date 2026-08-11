@@ -29,6 +29,7 @@ namespace
 
 using eltanin_ros_common::FootprintMarkerStyle;
 using eltanin_ros_common::to_footprint_markers;
+using eltanin_ros_common::to_swept_footprint_markers;
 using eltanin_ros_common::test::contains;
 using eltanin_ros_common::test::is_one_line;
 using eltanin_ros_common::test::names_the_package_once;
@@ -200,6 +201,73 @@ TEST(ToFootprintMarkersTest, TheNamespaceReachesEveryMarkerIncludingTheDeleteAll
   for (const Marker & marker : markers.value().markers) {
     EXPECT_EQ(marker.ns, "plan_footprint");
   }
+}
+
+std::vector<std_msgs::msg::ColorRGBA> colors_for(std::size_t poses)
+{
+  std::vector<std_msgs::msg::ColorRGBA> colors(poses);
+  for (std::size_t index = 0; index < poses; ++index) {
+    colors[index].g = static_cast<float>(index) / static_cast<float>(poses);
+    colors[index].a = 1.0F;
+  }
+  return colors;
+}
+
+TEST(ToSweptFootprintMarkersTest, DrawsOneOutlinePerPoseInItsOwnColour)
+{
+  const auto markers = to_swept_footprint_markers(
+    make_path(4), make_footprint(), colors_for(4), "map", make_stamp(), false);
+  ASSERT_TRUE(markers.ok()) << markers.error();
+
+  // One DELETEALL for the footprints, four outlines, and one DELETEALL for the absent contact.
+  ASSERT_EQ(markers.value().markers.size(), 6u);
+  EXPECT_EQ(markers.value().markers.front().action, Marker::DELETEALL);
+  int outlines = 0;
+  for (const Marker & marker : markers.value().markers) {
+    if (marker.type == Marker::LINE_STRIP && marker.action == Marker::ADD) {
+      ++outlines;
+    }
+  }
+  EXPECT_EQ(outlines, 4);
+  EXPECT_FLOAT_EQ(markers.value().markers[4].color.g, 0.75F);
+}
+
+TEST(ToSweptFootprintMarkersTest, MarksTheContactPointOnlyWhenAsked)
+{
+  const auto with_contact = to_swept_footprint_markers(
+    make_path(3), make_footprint(), colors_for(3), "map", make_stamp(), true);
+  ASSERT_TRUE(with_contact.ok());
+  int spheres = 0;
+  for (const Marker & marker : with_contact.value().markers) {
+    if (marker.type == Marker::SPHERE) {
+      ++spheres;
+    }
+  }
+  EXPECT_EQ(spheres, 1);
+
+  const auto without = to_swept_footprint_markers(
+    make_path(3), make_footprint(), colors_for(3), "map", make_stamp(), false);
+  ASSERT_TRUE(without.ok());
+  for (const Marker & marker : without.value().markers) {
+    EXPECT_NE(marker.type, Marker::SPHERE);
+  }
+}
+
+TEST(ToSweptFootprintMarkersTest, RejectsAColourCountThatDoesNotMatchThePoses)
+{
+  const auto markers = to_swept_footprint_markers(
+    make_path(4), make_footprint(), colors_for(3), "map", make_stamp(), false);
+  EXPECT_FALSE(markers.ok());
+  EXPECT_TRUE(contains(markers.error(), "one per pose"));
+}
+
+TEST(ToSweptFootprintMarkersTest, AnEmptyPathClearsWithoutDrawing)
+{
+  const auto markers =
+    to_swept_footprint_markers(eltanin::Path{}, make_footprint(), {}, "map", make_stamp(), false);
+  ASSERT_TRUE(markers.ok()) << markers.error();
+  ASSERT_EQ(markers.value().markers.size(), 1u);
+  EXPECT_EQ(markers.value().markers.front().action, Marker::DELETEALL);
 }
 
 }  // namespace

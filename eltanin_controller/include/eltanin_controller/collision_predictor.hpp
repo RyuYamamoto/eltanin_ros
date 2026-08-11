@@ -32,7 +32,9 @@
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <nav_msgs/msg/path.hpp>
+#include <std_msgs/msg/color_rgba.hpp>
 #include <std_srvs/srv/set_bool.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
 
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
@@ -72,6 +74,8 @@ private:
     std::optional<double> clearance{};
     double proximity_scale{1.0};
     std::vector<eltanin::Pose2D> predicted_poses{};
+    /// Room beside the body at each predicted pose [m]; one per predicted_poses, for the markers.
+    std::vector<double> pose_clearances{};
     bool prediction_truncated{false};
     double cycle_dt{0.0};
     double command_age{0.0};
@@ -91,6 +95,9 @@ private:
 
   /// The single publish path; the only branch in it is whether /cmd_vel goes out at all.
   void publish_cycle(CycleOutcome & cycle, const rclcpp::Time & now);
+
+  /// One colour per predicted pose for the swept-footprint markers, from the per-pose clearance.
+  std::vector<std_msgs::msg::ColorRGBA> clearance_colors(const CycleOutcome & cycle) const;
 
   void on_command(geometry_msgs::msg::TwistStamped::ConstSharedPtr msg);
 
@@ -126,6 +133,7 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr command_publisher_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr predicted_poses_publisher_;
   rclcpp::Publisher<geometry_msgs::msg::PolygonStamped>::SharedPtr footprint_publisher_;
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr swept_footprint_publisher_;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diagnostic_publisher_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr enable_output_service_;
 
