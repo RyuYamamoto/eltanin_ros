@@ -6,8 +6,9 @@
   <description>
     The control nodes. path_follower turns a path into a requested velocity by composing eltanin's
     PurePursuit with its GoalApproach, and publishes a command every cycle including the cycles it
-    has nothing to follow, so that a stopped follower is never a silent one. collision_predictor,
-    which owns /cmd_vel, is added in task 12.
+    has nothing to follow, so that a stopped follower is never a silent one. collision_predictor is
+    the single owner of /cmd_vel: it runs outside any action, limits that requested velocity against
+    the local map and publishes a zero command whenever an input goes stale.
   </description>
   <maintainer email="ryuyamamoto@pfrobotics.jp">RyuYamamoto</maintainer>
   <license>Apache-2.0</license>

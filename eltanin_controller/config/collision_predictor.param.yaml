@@ -1,0 +1,47 @@
+# Every parameter collision_predictor declares, written out. The machine values (robot.* and
+# frames.*) are not here: they come from eltanin_ros_common/config/robot/<profile>.yaml through the
+# /** wildcard, so no key appears in both files. robot.max_decel is the deceleration the braking
+# law uses and robot.footprint the shape it checks; neither is redeclared here.
+#
+# Unlike path_follower this node declares every key with a default, so it starts with no
+# configuration at all. That is safe because the default of output_enabled_on_startup is false.
+collision_predictor:
+  ros__parameters:
+    # 20 Hz. The kachaka bridge watchdog is 0.3 s, so anything below 4 Hz can let it fire between
+    # two cycles; the node warns rather than refusing, but do not go there.
+    update_frequency: 20.0
+
+    # Deadlines on the two inputs. A stamp in the future is stale too. Both are checked before the
+    # transform, and any of them elapsing publishes a zero command rather than nothing.
+    cmd_timeout: 0.3
+    map_timeout: 0.5
+
+    # false on the robot. Turning the output on while it is docked makes it drive off, so the
+    # simulation configuration is the only one that should set this to true.
+    output_enabled_on_startup: false
+
+    # The prediction. The horizon is derived, not configured: it is
+    # reaction_time + |v| / robot.max_decel, so prediction_steps is the only resolution knob.
+    prediction_steps: 10
+    # Latency budget [s]: sensor age, this cycle, cmd_timeout and the driver watchdog. It sets the
+    # horizon at rest and caps the speed at which the remaining gap may be closed.
+    reaction_time: 0.3
+    # Distance kept in front of the predicted collision [m].
+    collision_margin: 0.2
+    # false drops the centre-cell Free short-circuit check and is only ever useful for a
+    # measurement; the node warns for the cycle it is off.
+    exact_footprint_check: true
+
+    # The proximity ramp, which slows the command down near an obstacle but never stops it.
+    # Clearance is measured from the circumscribed circle, so 0.10 is 10 cm outside the robot.
+    stop_clearance: 0.10
+    slow_down_clearance: 0.50
+    # Strictly positive: a floor of 0 would make a 0.6 m corridor impassable. Stopping is the job
+    # of the braking-distance and reaction-time laws alone.
+    min_proximity_scale: 0.25
+    # Time [s] the ramp takes to climb back to 1.0; dropping is always immediate.
+    release_time: 0.5
+
+    # Distances beyond this saturate [m]. It has to exceed the circumscribed radius of
+    # robot.footprint, or the collision check can never report a free cell again.
+    clearance_max_distance: 1.0

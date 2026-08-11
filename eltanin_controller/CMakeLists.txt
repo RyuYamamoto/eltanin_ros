@@ -25,6 +25,7 @@ if(ELTANIN_ROS_ENABLE_WERROR)
 endif()
 
 add_library(${PROJECT_NAME} SHARED
+  src/collision_predictor.cpp
   src/command_composition.cpp
   src/follower_parameters.cpp
   src/limiter_diagnostic.cpp
@@ -37,8 +38,10 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 # src/diagnostic.hpp is private: the single shape of a line this package logs, not part of the API.
 target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 # eltanin_ros_common_runtime carries eltanin::core, eltanin::map, eltanin_msgs, diagnostic_msgs,
-# geometry_msgs, nav_msgs and rclcpp; eltanin::control and std_srvs are what this package adds.
+# geometry_msgs, nav_msgs and rclcpp; eltanin::collision, eltanin::control and std_srvs are what
+# this package adds. collision is PUBLIC because collision_predictor.hpp names VelocityGovernor.
 target_link_libraries(${PROJECT_NAME} PUBLIC
+  eltanin::collision
   eltanin::control
   ${diagnostic_msgs_TARGETS}
   eltanin_ros_common::eltanin_ros_common_runtime
@@ -57,6 +60,14 @@ include(CheckCXXCompilerFlag)
 rclcpp_components_register_node(${PROJECT_NAME}
   PLUGIN "eltanin_controller::PathFollower"
   EXECUTABLE path_follower
+  EXECUTOR MultiThreadedExecutor
+  NO_UNDEFINED_SYMBOLS)
+
+# The timer, the two subscriptions and ~/enable_output sit in separate MutuallyExclusive callback
+# groups, which is only meaningful under a MultiThreadedExecutor.
+rclcpp_components_register_node(${PROJECT_NAME}
+  PLUGIN "eltanin_controller::CollisionPredictor"
+  EXECUTABLE collision_predictor
   EXECUTOR MultiThreadedExecutor
   NO_UNDEFINED_SYMBOLS)
 
@@ -87,6 +98,12 @@ if(BUILD_TESTING)
   target_link_libraries(test_path_follower ${PROJECT_NAME} ament_index_cpp::ament_index_cpp)
   target_include_directories(test_path_follower PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_compile_options(test_path_follower PRIVATE ${warning_options})
+
+  # N-1 and N-2 pinned against the running node; the same timeout reasoning as above applies.
+  ament_add_gtest(test_watchdog test/test_watchdog.cpp TIMEOUT 120)
+  target_link_libraries(test_watchdog ${PROJECT_NAME} ament_index_cpp::ament_index_cpp)
+  target_include_directories(test_watchdog PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_compile_options(test_watchdog PRIVATE ${warning_options})
 endif()
 
 ament_package()
