@@ -220,6 +220,20 @@ CollisionPredictor::CycleOutcome CollisionPredictor::run_cycle(const rclcpp::Tim
   const bool enabled = output_enabled_.load();
   cycle.publish_command = enabled || flush_zero_once_.exchange(false);
 
+  evaluate_cycle(now, cycle);
+
+  // Being disabled suppresses the command, not the checking: the cycle above ran either way, so
+  // the transform, the clearance and the predicted poses can be read before anything can move.
+  if (!enabled) {
+    cycle.command = eltanin::Twist2D{};
+    cycle.reason = LimiterReason::OutputDisabled;
+    cycle.message = diagnostic::line("the output is disabled; ~/enable_output turns it on");
+  }
+  return cycle;
+}
+
+void CollisionPredictor::evaluate_cycle(const rclcpp::Time & now, CycleOutcome & cycle)
+{
   const CommandReading command = inputs_.read_command(now);
   const MapReading map = inputs_.read_map(now);
   cycle.requested = command.value;
@@ -228,25 +242,20 @@ CollisionPredictor::CycleOutcome CollisionPredictor::run_cycle(const rclcpp::Tim
   cycle.map_age = map.age_seconds;
   cycle.map_has_age = map.has_age;
 
-  if (!enabled) {
-    cycle.reason = LimiterReason::OutputDisabled;
-    cycle.message = diagnostic::line("the output is disabled; ~/enable_output turns it on");
-    return cycle;
-  }
   if (command.reason != LimiterReason::None) {
     cycle.reason = command.reason;
     cycle.message =
       command.reason == LimiterReason::CommandRejected
         ? inputs_.command_rejection()
         : diagnostic::line(std::string("the requested command is ") + name_of(command.reason));
-    return cycle;
+    return;
   }
   if (map.reason != LimiterReason::None) {
     cycle.reason = map.reason;
     cycle.message = map.reason == LimiterReason::MapRejected
                       ? inputs_.map_rejection()
                       : diagnostic::line(std::string("the local map is ") + name_of(map.reason));
-    return cycle;
+    return;
   }
 
   const std::optional<eltanin::Pose2D> robot = robot_pose();
@@ -255,7 +264,7 @@ CollisionPredictor::CycleOutcome CollisionPredictor::run_cycle(const rclcpp::Tim
     cycle.message = diagnostic::line(
       "frames.base '" + profile_.frames().base + "' in frames.map '" + profile_.frames().map +
       "' is not available");
-    return cycle;
+    return;
   }
   cycle.transform_ok = true;
 
@@ -280,13 +289,12 @@ CollisionPredictor::CycleOutcome CollisionPredictor::run_cycle(const rclcpp::Tim
     if (outside_map_latch_.should_warn()) {
       RCLCPP_WARN(get_logger(), "%s", cycle.message.c_str());
     }
-    return cycle;
+    return;
   }
 
   cycle.command = result.command;
   cycle.reason = (result.has_collision || result.proximity_scale < 1.0) ? LimiterReason::Limited
                                                                         : LimiterReason::None;
-  return cycle;
 }
 
 void CollisionPredictor::publish_cycle(CycleOutcome & cycle, const rclcpp::Time & now)

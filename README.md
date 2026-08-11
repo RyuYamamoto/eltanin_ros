@@ -893,8 +893,12 @@ turn the output on, and switching it back off publishes **one** zero command bef
 relying on the driver's own watchdog to stop the robot would be N-1 again, one layer down.
 
 The three other topics — `~/predicted_poses`, `~/footprint` and `~/diagnostics` — are published on
-**every** cycle, disabled ones included. A node that is silent because it was told to be must not
-look like a node that died.
+**every** cycle, disabled ones included, and a disabled cycle is a fully checked one: the transform
+is looked up, the map is converted, the governor runs and only the publish is suppressed. That is
+what makes enabling the output a decision rather than an experiment — `transform_ok`, `map_age`,
+`clearance` and `~/predicted_poses` in RViz all answer "will it work" while the robot cannot move.
+A node that is silent because it was told to be must not look like a node that died, and it must
+not hide whether it is healthy either.
 
 #### The limiter law changed with this node
 

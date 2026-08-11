@@ -478,6 +478,41 @@ TEST_F(CollisionPredictorFixture, DisabledOutputPublishesNothingButKeepsTalking)
   EXPECT_EQ(status_of(last_diagnostic()).level, Status::WARN);
 }
 
+TEST_F(CollisionPredictorFixture, ADisabledCycleIsStillACheckedCycle)
+{
+  // The point of a pre-flight check: everything but the publish has to be readable before the
+  // robot can move, or the only way to find out that tf is missing is to enable the output.
+  start();
+  broadcast_robot(1.0, 1.0, 0.0);
+  ASSERT_TRUE(drive(0.25, 0.0, -1, 8));
+  ASSERT_TRUE(wait_until("a checked disabled cycle", [this]() {
+    return value_of(last_diagnostic(), "transform_ok") == "true";
+  }));
+
+  const Diagnostic latest = last_diagnostic();
+  EXPECT_EQ(command_count(), 0u);
+  EXPECT_EQ(value_of(latest, "reason"), "output_disabled");
+  EXPECT_EQ(value_of(latest, "output_enabled"), "false");
+  EXPECT_EQ(value_of(latest, "clearance_available"), "true");
+  EXPECT_FALSE(std::isnan(number_of(latest, "clearance")));
+  EXPECT_GT(number_of(latest, "horizon"), 0.0);
+  EXPECT_DOUBLE_EQ(number_of(latest, "requested_linear"), 0.25);
+  // The command it would have published is not reported as one it did.
+  EXPECT_DOUBLE_EQ(number_of(latest, "command_linear"), 0.0);
+  EXPECT_EQ(last_path().poses.size(), 11u);
+}
+
+TEST_F(CollisionPredictorFixture, ADisabledCycleReportsAMissingTransform)
+{
+  start();
+  ASSERT_TRUE(drive(0.25, 0.0, -1, 5));
+  ASSERT_TRUE(wait_for_diagnostics(3));
+
+  EXPECT_EQ(value_of(last_diagnostic(), "reason"), "output_disabled");
+  EXPECT_EQ(value_of(last_diagnostic(), "transform_ok"), "false");
+  EXPECT_EQ(command_count(), 0u);
+}
+
 TEST_F(CollisionPredictorFixture, EnabledWithNoInputsPublishesZeroAtTheCycleRate)
 {
   start();

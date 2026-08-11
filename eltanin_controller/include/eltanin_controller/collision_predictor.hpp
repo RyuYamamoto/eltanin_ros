@@ -86,6 +86,9 @@ private:
 
   CycleOutcome run_cycle(const rclcpp::Time & now);
 
+  /// The whole pipeline, run whether or not the output is enabled; failures stay in the outcome.
+  void evaluate_cycle(const rclcpp::Time & now, CycleOutcome & cycle);
+
   /// The single publish path; the only branch in it is whether /cmd_vel goes out at all.
   void publish_cycle(CycleOutcome & cycle, const rclcpp::Time & now);
 
