@@ -65,7 +65,7 @@ global_path_planner:
       allow_reverse: true
       # The body can rotate without translating, as a differential drive does. The path then
       # contains consecutive poses that share a position, which the follower has to execute too.
-      allow_turn_in_place: true
+      allow_turn_in_place: false
       # Multiplies the cost of reversing; only meaningful when allow_reverse is true.
       reverse_penalty: 2.0
       # Charged per switch between forward and reverse, as a multiple of one motion step.
