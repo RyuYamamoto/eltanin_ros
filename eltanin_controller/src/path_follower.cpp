@@ -452,7 +452,10 @@ void PathFollower::publish_cycle(const CycleOutcome & cycle, const rclcpp::Time 
 
   eltanin_ros_common::DiagnosticStatusBuilder builder(
     get_fully_qualified_name(), composition::level_of(cycle.outcome), cycle.message);
-  builder.add("reason", composition::name_of(cycle.outcome.reason))
+  builder
+    .add("reason", composition::name_of(cycle.outcome.reason))
+    // Which follower produced this: the two align in place differently and it shows on the robot.
+    .add("follower", name_of(parameters_.follower.type))
     .add("status", eltanin::control::to_string(cycle.outcome.status))
     .add("approach_state", composition::name_of(cycle.outcome.approach_state))
     .add("ok", cycle.outcome.ok)

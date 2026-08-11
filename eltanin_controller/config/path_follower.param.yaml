@@ -12,7 +12,7 @@ path_follower:
     # which is what a reversing plan needs; only the mpc follower can execute one.
     path_source: path
     # pure_pursuit or mpc. mpc needs eltanin_vendor built with ELTANIN_VENDOR_ENABLE_MPC=ON.
-    follower_type: pure_pursuit
+    follower_type: mpc
     # 0 is no deadline: the global path is published once per replan, not periodically.
     path_timeout: 0.0
     trajectory_timeout: 0.5

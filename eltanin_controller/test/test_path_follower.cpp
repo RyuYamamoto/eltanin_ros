@@ -391,6 +391,8 @@ TEST_F(PathFollowerFixture, WithoutAPathTheZeroCommandKeepsComing)
   EXPECT_TRUE(every_command_is_zero());
   const Diagnostic latest = last_diagnostic();
   EXPECT_EQ(value_of(latest, "ok"), "true");
+  // The shipped configuration selects the follower; pinned here so a silent flip is visible.
+  EXPECT_EQ(value_of(latest, "follower"), "mpc");
   EXPECT_EQ(value_of(latest, "status"), "no path");
   EXPECT_FALSE(status_of(latest).message.empty());
   EXPECT_EQ(status_of(latest).message.find('\n'), std::string::npos);
@@ -425,7 +427,8 @@ TEST_F(PathFollowerFixture, WithoutATransformTheZeroCommandKeepsComing)
 
 TEST_F(PathFollowerFixture, APathAndATransformProduceAForwardCommandAndALookaheadPoint)
 {
-  start();
+  // Only a geometric follower has a lookahead point, so this one names the follower it needs.
+  start({rclcpp::Parameter("follower_type", "pure_pursuit")});
   broadcast_robot(0.0, 0.0, 0.0);
   ASSERT_TRUE(wait_for_commands(2));
   ASSERT_TRUE(publish_path(make_path(helper_->now())));
@@ -599,8 +602,13 @@ TEST_F(PathFollowerFixture, PurePursuitRefusesAReversingPathAndKeepsPublishingZe
 
 TEST_F(PathFollowerFixture, AParameterOutsideItsRangeStopsTheNodeFromStarting)
 {
+  // pure_pursuit.* is only validated for the follower that reads it, so the type comes along.
   EXPECT_THROW(
-    start({rclcpp::Parameter("pure_pursuit.min_lookahead_dist", 0.0)}), std::runtime_error);
+    start(
+      {rclcpp::Parameter("follower_type", "pure_pursuit"),
+       rclcpp::Parameter("pure_pursuit.min_lookahead_dist", 0.0)}),
+    std::runtime_error);
+  EXPECT_THROW(start({rclcpp::Parameter("mpc.prediction_horizon", 0)}), std::runtime_error);
   EXPECT_THROW(start({rclcpp::Parameter("path_source", "bogus")}), std::runtime_error);
   EXPECT_THROW(start({rclcpp::Parameter("update_frequency", 0.0)}), std::runtime_error);
 }
