@@ -33,21 +33,15 @@ collision_predictor:
     exact_footprint_check: true
 
     # The proximity ramp, which slows the command down near an obstacle but never stops it.
-    # TUNED for kachaka: eltanin ships 0.10 / 0.50, which were picked from one number, a 0.6 m
-    # corridor. Clearance is measured from the *circumscribed* circle, and kachaka's is 0.266 m
-    # against a half width of 0.120 m, so those defaults floor the ramp whenever anything is within
-    # 0.366 m of the robot centre - 0.25 m of clear floor beside it. Measured on the robot, indoor
-    # navigation sits at the floor value almost continuously and drives at a quarter speed.
+    # Clearance is the room beside the body: the distance to the nearest obstacle less the
+    # inscribed radius, which is 0.120 m on kachaka. In a corridor of width W driven down the
+    # middle it reads W / 2 - 0.120, so 0.15 is full speed from 0.54 m of corridor upwards.
     #
-    #                        centre to obstacle      clear floor beside the robot
-    #   ramp starts          0.516 m                 0.40 m
-    #   floor value          0.266 m                 0.15 m
-    #
-    # 0.0 means the floor is reached when an obstacle touches the circumscribed circle, which is
-    # still conservative: stopping is not this ramp's job. The braking-distance and reaction-time
-    # laws own it, and they check the real footprint rather than a circle around it.
+    # TUNED for kachaka: eltanin ships 0.10 / 0.50 for its own 0.6 m square outline. Measured on
+    # the robot in a 0.5 to 0.6 m corridor, 0.25 held the ramp near its floor for most of the
+    # drive and the body ran at a quarter speed with 13 to 18 cm of clear floor on each side.
     stop_clearance: 0.0
-    slow_down_clearance: 0.25
+    slow_down_clearance: 0.15
     # Strictly positive: a floor of 0 would make a 0.6 m corridor impassable. Stopping is the job
     # of the braking-distance and reaction-time laws alone.
     min_proximity_scale: 0.25

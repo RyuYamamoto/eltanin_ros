@@ -924,6 +924,7 @@ only the consequences are here.
 | the 2 s rollout tip wandered 0.30 m under the angular jitter of pure pursuit — 2.5x the footprint half width | the horizon is derived: `reaction_time + \|v\| / robot.max_decel`, 0.9 s on kachaka. `prediction_time` is gone |
 | latency was nowhere in the law | a second cap, `(collision_distance - margin) / reaction_time`, and `time_to_collision` in the diagnostic |
 | a single mistaken cell was a full stop | a proximity ramp on the clearance, floored at `min_proximity_scale` so it slows down but never stops |
+| the ramp measured clearance from the circumscribed circle, so a corridor the body fits through read as no room at all | it measures from the inscribed circle: the room beside the body |
 | the limit snapped back the moment a cell cleared | `VelocityGovernor` releases over `release_time`; dropping stays immediate |
 
 The enabling change is that this node does **not** hand the local map to the limiter. `local_map`
@@ -934,6 +935,16 @@ needs. **One missing inflation was the common cause of both R-10 and the stairca
 distance field in the consumer was the answer to both.** The node keeps no costmap; the distance
 map alone still identifies the obstacles, because a cell at distance 0 is one.
 
+The ramp measures **the room beside the body**: the distance to the nearest obstacle less the
+inscribed radius. The circumscribed circle was the first choice, on the grounds that it is
+conservative and impossible to get wrong, and on the robot it did not survive first contact.
+kachaka's circumscribed radius is 0.266 m against a half width of 0.120 m, so a corridor narrower
+than 0.53 m reads as no clearance at all however the thresholds are set — while the body is 0.24 m
+wide and drives a 0.5 m corridor without trouble. Measured over 697 cycles of one such corridor,
+`proximity_scale` sat at its floor for the whole drive and `/cmd_vel` carried a quarter of what was
+asked for. The inscribed circle is optimistic for an obstacle straight ahead, and that is the right
+trade: the rollout covers ahead exactly, and what the ramp is there for is the wall alongside.
+
 `exact_footprint_check` stays `true` by default. On a distance map it is no longer required for
 correctness, only cheaper or not, and the default is kept so that handing a raw costmap to this code
 some day does not silently degrade.
@@ -942,8 +953,12 @@ some day does not silently degrade.
 
 `update_frequency` 20.0 / `cmd_timeout` 0.3 / `map_timeout` 0.5 / `output_enabled_on_startup` false
 / `prediction_steps` 10 / `reaction_time` 0.3 / `collision_margin` 0.2 / `exact_footprint_check`
-true / `stop_clearance` 0.10 / `slow_down_clearance` 0.50 / `min_proximity_scale` 0.25 /
+true / `stop_clearance` 0.0 / `slow_down_clearance` 0.15 / `min_proximity_scale` 0.25 /
 `release_time` 0.5 / `clearance_max_distance` 1.0.
+
+The two clearance thresholds are tuned for kachaka and differ from eltanin's own defaults of 0.10
+and 0.50, which suit its 0.6 m square outline. Read against the inscribed radius, 0.15 means full
+speed from 0.54 m of corridor upwards.
 
 `robot.footprint`, `robot.max_decel`, `robot.max_linear_vel`, `frames.map` and `frames.base` come
 from the machine profile and are **not** redeclared. Unlike `path_follower`, every key here has a

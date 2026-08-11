@@ -654,14 +654,17 @@ TEST_F(CollisionPredictorFixture, TheSignSurvivesTheLimit)
 {
   start();
   ASSERT_TRUE(enable_output(true));
+  // Facing -x and reversing moves the body towards +x, so the wall it brakes for is ahead of it
+  // there. Placed so the braking law cuts the command without reaching zero.
   broadcast_robot(1.0, 1.0, 3.14159265358979);
-  ASSERT_TRUE(drive(-0.25, 0.0, 12, 10));
+  ASSERT_TRUE(drive(-0.3, 0.0, 27, 10));
 
   ASSERT_TRUE(wait_until("a limited reverse command", [this]() {
     const double linear = last_command().linear.x;
-    return linear < 0.0 && linear > -0.25;
+    return linear < 0.0 && linear > -0.3;
   }));
   EXPECT_LT(last_command().linear.x, 0.0);
+  EXPECT_EQ(value_of(last_diagnostic(), "has_collision"), "true");
 }
 
 TEST_F(CollisionPredictorFixture, PureRotationIsZeroedByAPredictedCollision)
