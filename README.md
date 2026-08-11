@@ -960,6 +960,18 @@ The two clearance thresholds are tuned for kachaka and differ from eltanin's own
 and 0.50, which suit its 0.6 m square outline. Read against the inscribed radius, 0.15 means full
 speed from 0.54 m of corridor upwards.
 
+`collision_margin` is tuned too: 0.10 against eltanin's 0.2, which came from navyu's safety limiter.
+The margin is a fixed buffer laid on top of two laws that already account for stopping — at 0.3 m/s
+the braking term contributes 0.09 m and the reaction term another 0.09 m — and in a 0.5 m corridor
+the fixed part is what dominates. It showed up as a deadlock: at a dead end the plan put its cusp
+0.170 m of travel from contact, 0.2 refused it for all 272 recorded cycles, and `run_index` never
+left 0, so the follower sat on its first run waiting for a cusp the limiter would not let it reach.
+At 0.10 the same approach runs at 0.23 m/s and stops 0.10 m short, with 0.18 m of law on top.
+
+**This is under evaluation on the robot.** It is the one parameter here that trades stopping
+distance for the ability to manoeuvre, and the alternative — keeping 0.2 and asking the planner to
+leave that much room at a cusp — would cost the dead-end turns the robot needs in a 0.5 m corridor.
+
 `robot.footprint`, `robot.max_decel`, `robot.max_linear_vel`, `frames.map` and `frames.base` come
 from the machine profile and are **not** redeclared. Unlike `path_follower`, every key here has a
 default, so the node starts on the robot profile alone; the shipped

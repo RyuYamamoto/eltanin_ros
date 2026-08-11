@@ -26,8 +26,17 @@ collision_predictor:
     # Latency budget [s]: sensor age, this cycle, cmd_timeout and the driver watchdog. It sets the
     # horizon at rest and caps the speed at which the remaining gap may be closed.
     reaction_time: 0.3
-    # Distance kept in front of the predicted collision [m].
-    collision_margin: 0.2
+    # Distance kept in front of the predicted collision [m]. Below it the command is exactly zero,
+    # so this is the line the body stops at, not a value it eases through.
+    #
+    # TUNED for kachaka: eltanin ships 0.2, inherited from navyu's safety limiter. That is a fixed
+    # buffer on top of two laws that already account for stopping - at 0.3 m/s the braking term is
+    # 0.09 m and the reaction term another 0.09 m - and in a 0.5 m corridor it is what stops the
+    # body reaching a cusp. Measured on the robot: at a dead end the plan asked for a cusp 0.170 m
+    # of travel from contact, 0.2 refused every one of 272 cycles and the follower never left its
+    # first run. 0.10 lets the same approach run at 0.23 m/s and stops 0.10 m short of contact,
+    # with the two laws adding 0.18 m on top of that.
+    collision_margin: 0.10
     # false drops the centre-cell Free short-circuit check and is only ever useful for a
     # measurement; the node warns for the cycle it is off.
     exact_footprint_check: true

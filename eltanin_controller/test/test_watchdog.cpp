@@ -652,10 +652,11 @@ TEST_F(CollisionPredictorFixture, TheLimitDoesNotRatchetToZero)
 
 TEST_F(CollisionPredictorFixture, TheSignSurvivesTheLimit)
 {
-  start();
+  start({rclcpp::Parameter("collision_margin", 0.2)});
   ASSERT_TRUE(enable_output(true));
   // Facing -x and reversing moves the body towards +x, so the wall it brakes for is ahead of it
-  // there. Placed so the braking law cuts the command without reaching zero.
+  // there. The margin is named here rather than taken from the shipped file: what is pinned is
+  // that the sign survives, not what the robot happens to be tuned to this month.
   broadcast_robot(1.0, 1.0, 3.14159265358979);
   ASSERT_TRUE(drive(-0.3, 0.0, 27, 10));
 
