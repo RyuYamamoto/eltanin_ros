@@ -50,11 +50,11 @@ ConversionResult<visualization_msgs::msg::MarkerArray> to_footprint_markers(
 /// The footprint at every pose, each in the colour the caller passes, plus a sphere at the last
 /// pose when mark_contact is set. What the colours mean is the caller's to decide; this only draws
 /// them. colors must hold one entry per pose. line_width [m] is the outline thickness.
-ConversionResult<visualization_msgs::msg::MarkerArray> to_swept_footprint_markers(
+ConversionResult<visualization_msgs::msg::MarkerArray> to_predicted_footprint_markers(
   const eltanin::Path & path, const eltanin::Polygon2D & footprint,
   const std::vector<std_msgs::msg::ColorRGBA> & colors, const std::string & frame_id,
   const builtin_interfaces::msg::Time & stamp, bool mark_contact,
-  const std::string & ns = "swept_footprint", double line_width = 0.02);
+  const std::string & ns = "predicted_footprint", double line_width = 0.02);
 
 }  // namespace eltanin_ros_common
 

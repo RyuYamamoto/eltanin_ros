@@ -163,7 +163,7 @@ ConversionResult<visualization_msgs::msg::MarkerArray> to_footprint_markers(
   return Result::success(std::move(markers));
 }
 
-ConversionResult<visualization_msgs::msg::MarkerArray> to_swept_footprint_markers(
+ConversionResult<visualization_msgs::msg::MarkerArray> to_predicted_footprint_markers(
   const eltanin::Path & path, const eltanin::Polygon2D & footprint,
   const std::vector<std_msgs::msg::ColorRGBA> & colors, const std::string & frame_id,
   const builtin_interfaces::msg::Time & stamp, bool mark_contact, const std::string & ns,

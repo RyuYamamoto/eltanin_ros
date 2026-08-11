@@ -74,7 +74,7 @@ private:
     std::optional<double> clearance{};
     double proximity_scale{1.0};
     std::vector<eltanin::Pose2D> predicted_poses{};
-    /// Room beside the body at each predicted pose [m]; one per predicted_poses, for the markers.
+    /// How close the body gets to an obstacle at each predicted pose [m]; 0 is contact.
     std::vector<double> pose_clearances{};
     bool prediction_truncated{false};
     double cycle_dt{0.0};
@@ -96,7 +96,7 @@ private:
   /// The single publish path; the only branch in it is whether /cmd_vel goes out at all.
   void publish_cycle(CycleOutcome & cycle, const rclcpp::Time & now);
 
-  /// One colour per predicted pose for the swept-footprint markers, from the per-pose clearance.
+  /// One colour per predicted pose for the markers, from the per-pose footprint clearance.
   std::vector<std_msgs::msg::ColorRGBA> clearance_colors(const CycleOutcome & cycle) const;
 
   void on_command(geometry_msgs::msg::TwistStamped::ConstSharedPtr msg);
@@ -133,7 +133,8 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr command_publisher_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr predicted_poses_publisher_;
   rclcpp::Publisher<geometry_msgs::msg::PolygonStamped>::SharedPtr footprint_publisher_;
-  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr swept_footprint_publisher_;
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr
+    predicted_footprints_publisher_;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diagnostic_publisher_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr enable_output_service_;
 

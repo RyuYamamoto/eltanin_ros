@@ -29,7 +29,7 @@ namespace
 
 using eltanin_ros_common::FootprintMarkerStyle;
 using eltanin_ros_common::to_footprint_markers;
-using eltanin_ros_common::to_swept_footprint_markers;
+using eltanin_ros_common::to_predicted_footprint_markers;
 using eltanin_ros_common::test::contains;
 using eltanin_ros_common::test::is_one_line;
 using eltanin_ros_common::test::names_the_package_once;
@@ -213,9 +213,9 @@ std::vector<std_msgs::msg::ColorRGBA> colors_for(std::size_t poses)
   return colors;
 }
 
-TEST(ToSweptFootprintMarkersTest, DrawsOneOutlinePerPoseInItsOwnColour)
+TEST(ToPredictedFootprintMarkersTest, DrawsOneOutlinePerPoseInItsOwnColour)
 {
-  const auto markers = to_swept_footprint_markers(
+  const auto markers = to_predicted_footprint_markers(
     make_path(4), make_footprint(), colors_for(4), "map", make_stamp(), false);
   ASSERT_TRUE(markers.ok()) << markers.error();
 
@@ -232,9 +232,9 @@ TEST(ToSweptFootprintMarkersTest, DrawsOneOutlinePerPoseInItsOwnColour)
   EXPECT_FLOAT_EQ(markers.value().markers[4].color.g, 0.75F);
 }
 
-TEST(ToSweptFootprintMarkersTest, MarksTheContactPointOnlyWhenAsked)
+TEST(ToPredictedFootprintMarkersTest, MarksTheContactPointOnlyWhenAsked)
 {
-  const auto with_contact = to_swept_footprint_markers(
+  const auto with_contact = to_predicted_footprint_markers(
     make_path(3), make_footprint(), colors_for(3), "map", make_stamp(), true);
   ASSERT_TRUE(with_contact.ok());
   int spheres = 0;
@@ -245,7 +245,7 @@ TEST(ToSweptFootprintMarkersTest, MarksTheContactPointOnlyWhenAsked)
   }
   EXPECT_EQ(spheres, 1);
 
-  const auto without = to_swept_footprint_markers(
+  const auto without = to_predicted_footprint_markers(
     make_path(3), make_footprint(), colors_for(3), "map", make_stamp(), false);
   ASSERT_TRUE(without.ok());
   for (const Marker & marker : without.value().markers) {
@@ -253,18 +253,18 @@ TEST(ToSweptFootprintMarkersTest, MarksTheContactPointOnlyWhenAsked)
   }
 }
 
-TEST(ToSweptFootprintMarkersTest, RejectsAColourCountThatDoesNotMatchThePoses)
+TEST(ToPredictedFootprintMarkersTest, RejectsAColourCountThatDoesNotMatchThePoses)
 {
-  const auto markers = to_swept_footprint_markers(
+  const auto markers = to_predicted_footprint_markers(
     make_path(4), make_footprint(), colors_for(3), "map", make_stamp(), false);
   EXPECT_FALSE(markers.ok());
   EXPECT_TRUE(contains(markers.error(), "one per pose"));
 }
 
-TEST(ToSweptFootprintMarkersTest, AnEmptyPathClearsWithoutDrawing)
+TEST(ToPredictedFootprintMarkersTest, AnEmptyPathClearsWithoutDrawing)
 {
-  const auto markers =
-    to_swept_footprint_markers(eltanin::Path{}, make_footprint(), {}, "map", make_stamp(), false);
+  const auto markers = to_predicted_footprint_markers(
+    eltanin::Path{}, make_footprint(), {}, "map", make_stamp(), false);
   ASSERT_TRUE(markers.ok()) << markers.error();
   ASSERT_EQ(markers.value().markers.size(), 1u);
   EXPECT_EQ(markers.value().markers.front().action, Marker::DELETEALL);

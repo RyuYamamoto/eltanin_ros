@@ -904,15 +904,18 @@ publishes.
 turn the output on, and switching it back off publishes **one** zero command before going quiet —
 relying on the driver's own watchdog to stop the robot would be N-1 again, one layer down.
 
-A fourth topic, `~/swept_footprint` (`visualization_msgs/MarkerArray`), draws the footprint at
-every predicted pose in RViz, coloured by the room beside the body at that pose: green from
-`slow_down_clearance` upward, red as it reaches the obstacle, so the colour changes exactly where
-the ramp starts slowing the command down. A colliding rollout stops at its last pose, and a sphere
-is drawn there. The `~/predicted_poses` line shows the same rollout as a path; the markers show
+A fourth topic, `~/predicted_footprints` (`visualization_msgs/MarkerArray`), draws the footprint at
+every predicted pose in RViz, coloured by how close the body gets to an obstacle at that pose:
+green from `slow_down_clearance` upward, red where it touches. A colliding rollout stops at its
+last pose, and a sphere is drawn there. The clearance here is measured **under the whole
+footprint**, not from a circle around it — the front reaches 0.237 m ahead of centre while the
+ramp's inscribed circle is 0.12 m, so a wall right under the bumper has to read as red even where
+the lateral ramp, which is about the room to the sides, is doing nothing. The two use different
+measures on purpose. The `~/predicted_poses` line shows the same rollout as a path; the markers show
 where along it the body gets close and where it would touch, which the line alone cannot.
 
 The three other topics — `~/predicted_poses`, `~/footprint` and `~/diagnostics` — plus
-`~/swept_footprint` are published on **every** cycle, disabled ones included, and a disabled cycle
+`~/predicted_footprints` are published on **every** cycle, disabled ones included, and a disabled cycle
 is a fully checked one: the transform
 is looked up, the map is converted, the governor runs and only the publish is suppressed. That is
 what makes enabling the output a decision rather than an experiment — `transform_ok`, `map_age`,

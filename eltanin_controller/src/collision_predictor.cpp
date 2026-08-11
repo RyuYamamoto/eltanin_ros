@@ -16,6 +16,8 @@
 
 #include "src/diagnostic.hpp"
 
+#include <eltanin/collision/collision_checker.hpp>
+#include <eltanin/core/polygon.hpp>
 #include <eltanin/map/cost_model.hpp>
 #include <eltanin/map/cost_values.hpp>
 #include <eltanin/map/distance_map.hpp>
@@ -62,7 +64,7 @@ rclcpp::QoS control_qos()
   return rclcpp::QoS(rclcpp::KeepLast(1)).reliable();
 }
 
-/// Green at slow_down_clearance and above, red at zero, so the colour changes where the ramp does.
+/// Green at slow_down_clearance and above, red at zero, where the body touches an obstacle.
 std_msgs::msg::ColorRGBA clearance_color(double clearance, double slow_down_clearance)
 {
   const double green = slow_down_clearance > 0.0
@@ -186,8 +188,8 @@ CollisionPredictor::CollisionPredictor(const rclcpp::NodeOptions & options)
     create_publisher<nav_msgs::msg::Path>("~/predicted_poses", control_qos());
   footprint_publisher_ =
     create_publisher<geometry_msgs::msg::PolygonStamped>("~/footprint", control_qos());
-  swept_footprint_publisher_ =
-    create_publisher<visualization_msgs::msg::MarkerArray>("~/swept_footprint", control_qos());
+  predicted_footprints_publisher_ =
+    create_publisher<visualization_msgs::msg::MarkerArray>("~/predicted_footprints", control_qos());
   diagnostic_publisher_ =
     create_publisher<diagnostic_msgs::msg::DiagnosticArray>("~/diagnostics", control_qos());
 
@@ -300,18 +302,12 @@ void CollisionPredictor::evaluate_cycle(const rclcpp::Time & now, CycleOutcome &
     !result.has_collision;
   cycle.predicted_poses = std::move(result.predicted_poses);
 
-  // Room beside the body at each pose, read per pose for the markers rather than swept to a
-  // minimum.
-  const double clearance_radius = governor_.limiter().clearance_radius();
+  // How close the body gets at each pose, under the whole footprint rather than from a circle.
+  const eltanin::Polygon2D & footprint = governor_.limiter().footprint();
   cycle.pose_clearances.reserve(cycle.predicted_poses.size());
   for (const eltanin::Pose2D & pose : cycle.predicted_poses) {
-    const std::optional<eltanin::map::MapIndex> index =
-      map.value->geometry().world_to_map(pose.position);
-    const std::optional<float> distance =
-      index.has_value() ? map.value->get(index->x, index->y) : std::nullopt;
-    cycle.pose_clearances.push_back(
-      distance.has_value() ? static_cast<double>(*distance) - clearance_radius
-                           : std::numeric_limits<double>::infinity());
+    cycle.pose_clearances.push_back(eltanin::collision::footprint_clearance(
+      *map.value, profile_.distance_model(), eltanin::transform(footprint, pose)));
   }
 
   // A rollout that left the map was never checked, so the command it produced says nothing (U-7).
@@ -348,12 +344,12 @@ void CollisionPredictor::publish_cycle(CycleOutcome & cycle, const rclcpp::Time 
   }
 
   // Coloured before the poses are moved into the Path below; contact sphere on the last pose.
-  const eltanin_ros_common::ConversionResult<visualization_msgs::msg::MarkerArray> swept =
-    eltanin_ros_common::to_swept_footprint_markers(
+  const eltanin_ros_common::ConversionResult<visualization_msgs::msg::MarkerArray> footprints =
+    eltanin_ros_common::to_predicted_footprint_markers(
       eltanin::Path(cycle.predicted_poses), governor_.limiter().footprint(),
       clearance_colors(cycle), profile_.frames().map, now, cycle.has_collision);
-  if (swept.ok()) {
-    swept_footprint_publisher_->publish(swept.value());
+  if (footprints.ok()) {
+    predicted_footprints_publisher_->publish(footprints.value());
   }
 
   // An empty path rather than the previous one: keeping a stale prediction on screen would lie.
