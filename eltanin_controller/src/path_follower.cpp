@@ -212,10 +212,14 @@ std::unique_ptr<eltanin::control::PathFollower> require_follower(
 {
   eltanin::control::FollowerResult result = eltanin::control::make_path_follower(params);
   if (!result.has_value()) {
+    // eltanin names its own option; from here the flag a user passes is the vendor's.
+    const std::string hint = result.error() == eltanin::control::FollowerError::MpcNotBuilt
+                               ? "; rebuild eltanin_vendor with ELTANIN_VENDOR_ENABLE_MPC=ON"
+                               : "";
     refuse_to_start(
       node, diagnostic::rejected(
-              KEY_FOLLOWER_TYPE,
-              std::string("is '") + name_of(params.type) + "': " + to_string(result.error())));
+              KEY_FOLLOWER_TYPE, std::string("is '") + name_of(params.type) +
+                                   "': " + to_string(result.error()) + hint));
   }
   return result.take();
 }

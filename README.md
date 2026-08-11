@@ -814,6 +814,18 @@ so a `path_follower` started after the planner has to be given the goal again.
 - §6.5's `dt` bound is stated for `max_angular_vel` 1.0. With `robot.max_angular_vel`'s default of
   1.57 it is **0.089 s**, not 0.14 s, and it binds only `PurePursuit`'s bang-bang in-place turns;
   `GoalApproach`'s final turn is proportional and unaffected.
+- **The MPC is what the kachaka demo now starts by default**, which takes one build option:
+  `colcon build --packages-select eltanin_vendor --cmake-args -DELTANIN_VENDOR_ENABLE_MPC=ON`,
+  followed by a rebuild of everything downstream because `ELTANIN_WITH_MPC` is a `PUBLIC` compile
+  definition. It is not the vendor default because it fetches OSQP and a plain build stays offline.
+  Without it `path_follower` refuses to start and names the flag.
+- **The MPC does not know what the robot actually executed.** It is handed
+  `FollowerState{pose, nullopt}`, so `twist_of()` falls back to **the command it returned last
+  cycle** — the one before `collision_predictor` limited it. Measured with a wall 0.21 m ahead: the
+  MPC asks 0.15 m/s every cycle while `/cmd_vel` carries 0.061, and the MPC keeps planning from
+  0.15. Its acceleration constraints are therefore applied around a speed the body is not at
+  whenever the limiter bites. Pure pursuit is geometric and barely notices; the MPC is the follower
+  that wants the odom subscription, and that subscription is still the open item.
 - §6.5 assumes one follower. `eltanin` now has a `PathFollower` base class, a `FollowStatus` with a
   fourth `SolverFailed` value, and an MPC behind `ELTANIN_ENABLE_MPC` (default off, and
   `eltanin_vendor` does not pass it). This node calls `follow()` and reads `FollowResult`, but builds
