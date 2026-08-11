@@ -89,6 +89,26 @@ colcon build --symlink-install --packages-ignore eltanin \
 `ELTANIN_VENDOR_BUILD_TYPE` controls only the `eltanin` ExternalProject, so the two build types can
 be chosen independently. CI runs both `Debug` and `RelWithDebInfo` (R-18).
 
+### Deleting a message needs `eltanin_msgs` rebuilt clean
+
+`rosidl` keeps generating from what is in `CMakeLists.txt`, but it does not remove what a previous
+build produced. Drop a `.msg` and rebuild incrementally and the C++ side is fine while the Python
+type support still exports the old symbol, so the whole package fails to import:
+
+```
+ImportError: .../eltanin_msgs_s__rosidl_typesupport_c.so:
+    undefined symbol: eltanin_msgs__msg__follower_diagnostic__convert_to_py
+```
+
+It is one `rclpy` node away from being the first thing anyone notices, and nothing in the C++ build
+sees it. After removing or renaming an interface:
+
+```bash
+rm -rf build/eltanin_msgs install/eltanin_msgs
+```
+
+CI builds from scratch and so never hits this.
+
 ### `--packages-ignore eltanin` is not optional
 
 colcon discovers `src/eltanin` as a plain `cmake` package even though it has no `package.xml`, so
