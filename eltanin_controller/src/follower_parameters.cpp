@@ -82,6 +82,7 @@ ConversionStatus require_angle_below_half_turn(const char * key, double value)
   return ConversionStatus::success();
 }
 
+#ifdef ELTANIN_WITH_MPC
 ConversionStatus require_positive_int(const char * key, int value)
 {
   if (value <= 0) {
@@ -90,6 +91,7 @@ ConversionStatus require_positive_int(const char * key, int value)
   }
   return ConversionStatus::success();
 }
+#endif
 
 ConversionStatus validate_pursuit(const eltanin::control::PurePursuitParams & pursuit)
 {

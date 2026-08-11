@@ -75,6 +75,7 @@ T require_parameter(rclcpp::Node & node, const char * key)
   }
 }
 
+#ifdef ELTANIN_WITH_MPC
 /// declare_parameter hands back an int64; only the mechanical range is checked here.
 int require_int(rclcpp::Node & node, const char * key)
 {
@@ -85,6 +86,7 @@ int require_int(rclcpp::Node & node, const char * key)
   }
   return static_cast<int>(value);
 }
+#endif
 
 PathSource require_path_source(rclcpp::Node & node)
 {
